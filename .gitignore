@@ -1,0 +1,114 @@
+# Build directories
+build/
+*/build/
+src/build/
+test/build/
+databento-cpp/build/
+
+databento-cpp
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+MarketDataProcessor
+inspect_data
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Python (for any Python scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files (if they're large)
+*.dbn
+*.csv
+*.parquet
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Coverage reports
+*.gcov
+*.gcno
+*.gcda
+
+# Profiling data
+*.prof
+gmon.out
+
+# Valgrind
+*.memcheck
+*.helgrind
+*.drd
+
+# Core dumps
+core
+core.*
