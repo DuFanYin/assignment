@@ -52,6 +52,10 @@ bathc write json to reduce IO overhead
 
 tried using ringbuffer for IO buffer, no improvement
 
+40 mins
+
+python server to concnet c++ sender and reveiver(order book)
+
 === TCP Market Data Sender ===
 🚀 High-Performance Market Data Streaming Server
 ===============================================
@@ -106,6 +110,9 @@ Final Order Book Summary:
   Best Ask: 65 @ 1 (1 orders)
   Bid-Ask Spread: 620000000
 =====================================
+
+
+
 
 
 

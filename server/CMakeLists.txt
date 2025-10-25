@@ -1,0 +1,77 @@
+cmake_minimum_required(VERSION 3.16)
+project(OrderBookMicroservices)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required system libraries
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(CURL REQUIRED)
+
+# Find zstd library
+find_library(ZSTD_LIBRARY zstd)
+if(NOT ZSTD_LIBRARY)
+    message(FATAL_ERROR "zstd library not found")
+endif()
+
+# Include directories (local copies)
+include_directories(include)
+include_directories(src)
+include_directories(../databento-cpp/include)
+include_directories(../databento-cpp/build/include)
+include_directories(../databento-cpp/build/_deps/date_src-src/include)
+include_directories(../databento-cpp/build/_deps/httplib-src)
+include_directories(../databento-cpp/build/_deps/json-src/include)
+
+# Source files (local copies)
+set(COMMON_SOURCES
+    src/utils.cpp
+    src/tcp_sender.cpp
+    src/tcp_receiver.cpp
+    src/streamer.cpp
+)
+
+# Sender Microservice executable
+add_executable(sender_microservice
+    sender_microservice.cpp
+    ${COMMON_SOURCES}
+)
+
+# Receiver Microservice executable  
+add_executable(receiver_microservice
+    receiver_microservice.cpp
+    ${COMMON_SOURCES}
+)
+
+# Link libraries (same as original src/)
+target_link_libraries(sender_microservice 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../databento-cpp/build/lib/Debug/libdatabento.a
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    ZLIB::ZLIB
+    CURL::libcurl
+    ${ZSTD_LIBRARY}
+)
+
+target_link_libraries(receiver_microservice 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../databento-cpp/build/lib/Debug/libdatabento.a
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    ZLIB::ZLIB
+    CURL::libcurl
+    ${ZSTD_LIBRARY}
+)
+
+# Compiler flags (same as original src/)
+target_compile_options(sender_microservice PRIVATE -Wall -Wextra -O2)
+target_compile_options(receiver_microservice PRIVATE -Wall -Wextra -O2 -march=native)
+
+# Set output directory
+set_target_properties(sender_microservice PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+set_target_properties(receiver_microservice PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
