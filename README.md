@@ -44,34 +44,68 @@ updatet the previous mnimal approch, break it up into sneder reciver and process
 
 added json output feature into order book, standerad metics caltulation and output on sedner and receiver
 
+10 min
+
+bathc write json to reduce IO overhead
+
+30 min 
+
+tried using ringbuffer for IO buffer, no improvement
+
+=== TCP Market Data Sender ===
+🚀 High-Performance Market Data Streaming Server
+===============================================
+[INFO] Starting TCP market data sender...
+[INFO] Loaded file: /Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn (2140232 bytes)
+📁 Data File: /Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn
+🌐 Server Port: 8080
+
+[INFO] Starting TCP streaming server...
+[INFO] TCP server listening on port 8080
+[INFO] Waiting for client connection...
+
+=== TCP Sender Final Statistics ===
+Streaming Time: 498 ms
+Messages Sent: 38212
+Throughput: 76731 messages/sec
+===================================
+[INFO] Data transmission completed successfully!
+
+
+=== TCP Market Data Receiver with Order Book ===
+📊 High-Performance Order Book Reconstruction & JSON Output
+=========================================================
+[INFO] Starting TCP market data receiver...
+🌐 Server Host: 127.0.0.1
+🔌 Server Port: 8080
+📈 Symbol: CLX5
+📊 Top Levels: 10
+📋 Output Mode: Complete Order Book
+📁 JSON Output File: ../data/order_book_output.json
+🔄 Buffer: Simple 4KB buffer (proven approach)
+📝 JSON Batching: 5000 records per batch, flush every 500
+
+[INFO] Connecting to TCP sender...
+[INFO] Starting message reception and order book processing with JSON output...
+[INFO] Skipped 1000 orders due to missing references (normal for real market data)
+[INFO] Server closed connection
 
 === TCP Receiver Final Statistics ===
-Processing Time: 114 ms
-Messages Received: 38212
+Processing Time: 693 ms
+Messages Received: 36988
 Orders Processed: 36988
-Message Throughput: 335193 messages/sec
-Order Processing Rate: 324456 orders/sec
+JSON Records Generated: 36988
+Message Throughput: 53374 messages/sec
+Order Processing Rate: 53374 orders/sec
 
-=== Final Statistics ===
-Processing Time: 114 ms
-Processed Orders: 36988
-Processing Rate: 324456 orders/sec
-Final Order Book:
-  Total Orders: 147
-  Bid Levels: 61
-  Ask Levels: 52
+Final Order Book Summary:
+  Active Orders: 147
+  Bid Price Levels: 61
+  Ask Price Levels: 52
   Best Bid: 64 @ 3 (1 orders)
   Best Ask: 65 @ 1 (1 orders)
-  Spread: 620000000
-
-
-=== Final Timing Statistics ===
-Total Time: 1005 ms
-Total Messages: 38212
-Average Latency: 29.485 ms
-Min Latency: 0.120 ms
-Max Latency: 43.512 ms
-Messages/sec: 38022
+  Bid-Ask Spread: 620000000
+=====================================
 
 
 

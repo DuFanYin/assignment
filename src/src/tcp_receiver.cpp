@@ -1,4 +1,4 @@
-#include "tcp_receiver.hpp"
+#include "../include/tcp_receiver.hpp"
 #include "utils.hpp"
 #include <iostream>
 #include <chrono>
@@ -9,12 +9,20 @@
 TCPReceiver::TCPReceiver() 
     : host_("127.0.0.1"), port_(8080), orderBook_(nullptr), symbol_(""), 
       topLevels_(10), outputFullBook_(true), jsonOutputEnabled_(false),
+      jsonBatchSize_(1000), jsonFlushInterval_(100), // Batch 1000 JSONs, flush every 100
       clientSocket_(-1), connected_(false), receiving_(false), 
       receivedMessages_(0), processedOrders_(0), jsonOutputs_(0) {
+    // Initialize JSON buffer
+    jsonBuffer_.reserve(jsonBatchSize_);
 }
 
 TCPReceiver::~TCPReceiver() {
-    stopReceiving();
+    // Only cleanup if not already stopped
+    if (receiving_) {
+        stopReceiving();
+    }
+    // Flush any remaining JSON data
+    flushJsonBuffer();
     cleanup();
 }
 
@@ -105,16 +113,10 @@ void TCPReceiver::startReceiving() {
         return;
     }
     
-    // Configure order book for JSON output
+    // Configure order book for batched JSON output
     if (jsonOutputEnabled_) {
         orderBook_->setJsonCallback([this](const std::string& json) {
-            if (!jsonOutputFile_.empty()) {
-                std::ofstream file(jsonOutputFile_, std::ios::app);
-                if (file.is_open()) {
-                    file << json << std::endl;
-                    file.close();
-                }
-            }
+            addJsonToBuffer(json);
             jsonOutputs_++;
         });
         orderBook_->setSymbol(symbol_);
@@ -138,6 +140,9 @@ void TCPReceiver::stopReceiving() {
         receivingThread_.join();
     }
     
+    // Flush any remaining JSON data before stopping
+    flushJsonBuffer();
+    
     if (clientSocket_ != -1) {
         close(clientSocket_);
         clientSocket_ = -1;
@@ -147,13 +152,14 @@ void TCPReceiver::stopReceiving() {
 }
 
 void TCPReceiver::receivingLoop() {
-    // Use FULL message format with all 14 fields - same buffering as working streamer
+    // Use simple buffer approach like the old working implementation
     char buffer[4096];
     size_t bufferPos = 0;
     bool timingStarted = false;
     
     try {
         while (receiving_) {
+            // Read raw bytes from network into buffer
             ssize_t bytesReceived = read(clientSocket_, buffer + bufferPos, sizeof(buffer) - bufferPos);
             
             if (bytesReceived <= 0) {
@@ -167,45 +173,40 @@ void TCPReceiver::receivingLoop() {
             
             bufferPos += bytesReceived;
             
-            // Process complete FULL messages - same approach as working streamer
+            // Process complete messages from buffer immediately
             while (bufferPos >= sizeof(MboMessage)) {
                 MboMessage* msg = reinterpret_cast<MboMessage*>(buffer);
                 
-                // Start timing on first message processed (consistent with sender)
+                // Start timing on first message processed
                 if (!timingStarted) {
                     startTime_ = std::chrono::high_resolution_clock::now();
                     timingStarted = true;
                 }
                 
-                // Convert to databento::MboMsg and process through order book
+                // Process message immediately (no queuing, no ring buffer complexity)
                 try {
-                    databento::MboMsg mbo = convertToMboMsg(*msg);
-                    
-                    // Process through order book (handles both processing and JSON output)
+                    databento::MboMsg mbo = convertToDatabentoMbo(*msg);
                     orderBook_->Apply(mbo);
                     processedOrders_++;
+                    receivedMessages_++;
                     
                 } catch (const std::invalid_argument& e) {
-                    // Handle missing orders/levels gracefully - this is normal for real market data
+                    // Handle missing orders/levels gracefully
                     std::string error_msg = e.what();
                     if (error_msg.find("No order with ID") != std::string::npos ||
                         error_msg.find("Received event for unknown level") != std::string::npos) {
-                        // Skip orders that reference non-existent orders/levels
                         static int skippedCount = 0;
                         if (++skippedCount % 1000 == 0) {
                             utils::logInfo("Skipped " + std::to_string(skippedCount) + " orders due to missing references (normal for real market data)");
                         }
                     } else {
-                        // Re-throw other invalid_argument exceptions
                         throw;
                     }
                 } catch (const std::exception& e) {
                     utils::logError("Error processing order: " + std::string(e.what()));
                 }
                 
-                receivedMessages_++;
-                
-                // Move remaining data to beginning of buffer - EXACTLY like working streamer
+                // Move remaining data to beginning of buffer (like old implementation)
                 memmove(buffer, buffer + sizeof(MboMessage), bufferPos - sizeof(MboMessage));
                 bufferPos -= sizeof(MboMessage);
             }
@@ -257,37 +258,7 @@ bool TCPReceiver::receiveData(void* data, size_t size) {
     return bytesReceived == static_cast<ssize_t>(size);
 }
 
-databento::MboMsg TCPReceiver::convertSimpleToMboMsg(const SimpleMboMessage& msg) {
-    databento::MboMsg mbo;
-    
-    // Convert timestamps - databento uses time_since_epoch().count() for raw values
-    // We need to reconstruct the time_point from the raw nanoseconds
-    auto epoch_time = std::chrono::system_clock::time_point(std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::nanoseconds(msg.timestamp)));
-    mbo.hd.ts_event = epoch_time;
-    
-    auto recv_time = std::chrono::system_clock::time_point(std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::nanoseconds(msg.timestamp + 1)));
-    mbo.ts_recv = recv_time;
-    
-    // Convert header fields
-    mbo.hd.rtype = databento::RType::Mbo;
-    mbo.hd.publisher_id = 1; // Default publisher
-    mbo.hd.instrument_id = 1; // Default instrument
-    
-    // Convert order fields
-    mbo.action = static_cast<databento::Action>(msg.action);
-    mbo.side = static_cast<databento::Side>(msg.side);
-    mbo.price = msg.price;
-    mbo.size = msg.size;
-    mbo.channel_id = 1; // Default channel
-    mbo.order_id = msg.order_id;
-    mbo.flags = databento::FlagSet(0); // Default flags
-    mbo.ts_in_delta = std::chrono::nanoseconds(0); // Default delta
-    mbo.sequence = 0; // Default sequence
-    
-    return mbo;
-}
-
-databento::MboMsg TCPReceiver::convertToMboMsg(const MboMessage& msg) {
+databento::MboMsg TCPReceiver::convertToDatabentoMbo(const MboMessage& msg) {
     databento::MboMsg mbo;
     
     // Convert timestamps - databento uses time_since_epoch().count() for raw values
@@ -333,4 +304,36 @@ void TCPReceiver::cleanup() {
         close(clientSocket_);
         clientSocket_ = -1;
     }
+}
+
+// JSON batching methods
+void TCPReceiver::addJsonToBuffer(const std::string& json) {
+    std::lock_guard<std::mutex> lock(jsonBufferMutex_);
+    jsonBuffer_.push_back(json);
+    
+    // Flush buffer when it reaches the batch size or flush interval
+    if (jsonBuffer_.size() >= jsonBatchSize_ || 
+        (jsonBuffer_.size() > 0 && jsonBuffer_.size() % jsonFlushInterval_ == 0)) {
+        flushJsonBuffer();
+    }
+}
+
+void TCPReceiver::flushJsonBuffer() {
+    if (jsonBuffer_.empty()) {
+        return;
+    }
+    
+    // Write all buffered JSON strings to file at once
+    if (!jsonOutputFile_.empty()) {
+        std::ofstream file(jsonOutputFile_, std::ios::app);
+        if (file.is_open()) {
+            for (const auto& json : jsonBuffer_) {
+                file << json << std::endl;
+            }
+            file.close();
+        }
+    }
+    
+    // Clear the buffer
+    jsonBuffer_.clear();
 }

@@ -112,3 +112,5 @@ gmon.out
 # Core dumps
 core
 core.*
+src/data/order_book_output.json
+*.json

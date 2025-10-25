@@ -3,6 +3,9 @@
 #include <string>
 #include <atomic>
 #include <thread>
+#include <memory>
+#include <mutex>
+#include <vector>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -12,6 +15,8 @@
 #include <databento/enums.hpp>
 #include <databento/constants.hpp>
 #include "order_book.hpp"
+#include "RingBuffer.hpp"
+#include "message_types.hpp"
 
 namespace db = databento;
 
@@ -29,6 +34,10 @@ public:
     void setOutputFullBook(bool output) { outputFullBook_ = output; }
     void enableJsonOutput(bool enable) { jsonOutputEnabled_ = enable; }
     void setJsonOutputFile(const std::string& filename) { jsonOutputFile_ = filename; }
+    
+    // JSON batching configuration
+    void setJsonBatchSize(size_t size) { jsonBatchSize_ = size; }
+    void setJsonFlushInterval(size_t interval) { jsonFlushInterval_ = interval; }
 
     // Connection and processing
     bool connect();
@@ -53,6 +62,12 @@ private:
     bool jsonOutputEnabled_;
     std::string jsonOutputFile_;
     
+    // JSON batching
+    size_t jsonBatchSize_;
+    size_t jsonFlushInterval_;
+    std::vector<std::string> jsonBuffer_;
+    std::mutex jsonBufferMutex_;
+    
     // Network
     int clientSocket_;
     struct sockaddr_in serverAddr_;
@@ -69,23 +84,7 @@ private:
     std::chrono::high_resolution_clock::time_point startTime_;
     std::chrono::high_resolution_clock::time_point endTime_;
     
-    // Binary message format matching sender
-    struct MboMessage {
-        uint64_t ts_event;
-        uint64_t ts_recv;
-        uint8_t rtype;
-        uint16_t publisher_id;
-        uint32_t instrument_id;
-        uint8_t action;
-        uint8_t side;
-        int64_t price;
-        uint32_t size;
-        uint8_t channel_id;
-        uint64_t order_id;
-        uint8_t flags;
-        int32_t ts_in_delta;
-        uint32_t sequence;
-    } __attribute__((packed));
+    // Using MboMessage from message_types.hpp
     
     // Simple message format for high-performance streaming
     struct SimpleMboMessage {
@@ -101,7 +100,10 @@ private:
     bool setupConnection();
     void receivingLoop();
     bool receiveData(void* data, size_t size);
-    databento::MboMsg convertSimpleToMboMsg(const SimpleMboMessage& msg);
-    databento::MboMsg convertToMboMsg(const MboMessage& msg);
+    databento::MboMsg convertToDatabentoMbo(const MboMessage& msg);
     void cleanup();
+    
+    // JSON batching methods
+    void addJsonToBuffer(const std::string& json);
+    void flushJsonBuffer();
 };

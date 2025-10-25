@@ -196,10 +196,6 @@ void TCPSender::streamingLoop() {
     
     // Pre-parsed MBO messages for streaming
     
-    // Get timestamp once for all messages (or use file timestamps)
-    auto baseTimestamp = std::chrono::high_resolution_clock::now();
-    auto baseTime = std::chrono::duration_cast<std::chrono::microseconds>(baseTimestamp.time_since_epoch()).count();
-    
     // Ultra-fast streaming loop - individual messages, no batching
     // Start streaming messages
     auto streamStart = std::chrono::high_resolution_clock::now();
@@ -208,8 +204,9 @@ void TCPSender::streamingLoop() {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {
             const auto& mbo = allMessages[i];
             
-            // Send message with calculated timestamp
-            if (!sendMboMessageFast(clientSocket_, mbo, baseTime + i)) {
+            // Send message with ORIGINAL timestamp to preserve file order
+            uint64_t originalTimestamp = mbo.hd.ts_event.time_since_epoch().count();
+            if (!sendMboMessageFast(clientSocket_, mbo, originalTimestamp)) {
                 utils::logError("Failed to send message " + std::to_string(i));
                 break;
             }
@@ -266,10 +263,10 @@ bool TCPSender::sendMboMessage(int clientSocket, const databento::MboMsg& mbo, u
 }
 
 bool TCPSender::sendMboMessageFast(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp) {
-    // Send FULL message with all 14 fields - exactly like the working streamer approach
+    // Send FULL message with all 14 fields - preserve original file order
     MboMessage msg;
-    msg.ts_event = timestamp;
-    msg.ts_recv = timestamp + 1;
+    msg.ts_event = timestamp;  // Use original timestamp from file
+    msg.ts_recv = timestamp + 1;  // Keep ts_recv slightly after ts_event
     msg.rtype = static_cast<uint8_t>(mbo.hd.rtype);
     msg.publisher_id = mbo.hd.publisher_id;
     msg.instrument_id = mbo.hd.instrument_id;
