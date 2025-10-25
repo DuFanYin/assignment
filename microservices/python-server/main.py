@@ -88,19 +88,8 @@ async def start_streaming():
         print("⏳ Waiting for order book file to be written...")
         time.sleep(3)
         
-        # Get processing statistics
-        print("📊 Getting processing statistics...")
-        try:
-            stats_url = f"{RECEIVER_SERVICE_URL}/stats"
-            stats_response = requests.get(stats_url, timeout=10)
-            if stats_response.status_code == 200:
-                receiver_data = stats_response.json()
-                print(f"✅ Got processing statistics")
-            else:
-                print(f"⚠️ Could not get stats: {stats_response.status_code}")
-        except Exception as e:
-            print(f"⚠️ Stats request failed: {e}")
-            # Keep the original receiver_data if stats fail
+        # Don't call /stats - we already have all the data from /start-processing
+        # The /stats endpoint would return data from the RESET receiver (zeros)
         
         # Step 3: Get Order Book Data
         print("📊 Retrieving order book data...")

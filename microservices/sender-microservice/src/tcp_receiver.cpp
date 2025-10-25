@@ -21,8 +21,6 @@ TCPReceiver::~TCPReceiver() {
     if (receiving_) {
         stopReceiving();
     }
-    // Flush any remaining JSON data
-    flushJsonBuffer();
     cleanup();
 }
 
@@ -117,7 +115,7 @@ void TCPReceiver::startReceiving() {
     if (jsonOutputEnabled_) {
         orderBook_->setJsonCallback([this](const std::string& json) {
             addJsonToBuffer(json);
-            jsonOutputs_++;
+            // jsonOutputs_++; // Remove duplicate counting - already counted in order_book.hpp
         });
         orderBook_->setSymbol(symbol_);
         orderBook_->setTopLevels(topLevels_);
@@ -130,24 +128,28 @@ void TCPReceiver::startReceiving() {
 }
 
 void TCPReceiver::stopReceiving() {
-    if (!receiving_) {
-        return;
-    }
-    
+    // Set receiving flag to false
     receiving_ = false;
     
+    // Wait for receiving thread to finish
     if (receivingThread_.joinable()) {
         receivingThread_.join();
     }
     
-    // Flush any remaining JSON data before stopping
+    // CRITICAL: Always flush remaining JSON data, even if thread already stopped
     flushJsonBuffer();
     
+    // Force one more flush to ensure all data is written
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    flushJsonBuffer();
+    
+    // Close socket
     if (clientSocket_ != -1) {
         close(clientSocket_);
         clientSocket_ = -1;
     }
     
+    // Mark as disconnected
     connected_ = false;
 }
 
@@ -224,7 +226,19 @@ void TCPReceiver::receivingLoop() {
     std::cout << "Messages Received: " << receivedMessages_ << std::endl;
     std::cout << "Orders Processed: " << processedOrders_ << std::endl;
     if (jsonOutputEnabled_) {
-        std::cout << "JSON Records Generated: " << orderBook_->getJsonOutputs() << std::endl;
+        // Count actual records in the file for accurate reporting
+        std::ifstream file(jsonOutputFile_);
+        int actualRecords = 0;
+        if (file.is_open()) {
+            std::string line;
+            while (std::getline(file, line)) {
+                if (!line.empty()) {
+                    actualRecords++;
+                }
+            }
+            file.close();
+        }
+        std::cout << "JSON Records Generated: " << actualRecords << std::endl;
     }
     if (duration.count() > 0) {
         double messagesPerSecond = (double)receivedMessages_ * 1000.0 / duration.count();

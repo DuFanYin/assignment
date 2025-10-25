@@ -48,7 +48,12 @@ public:
     size_t getReceivedMessages() const { return receivedMessages_; }
     size_t getProcessedOrders() const { return processedOrders_; }
     double getThroughput() const;
-    size_t getJsonOutputs() const { return jsonOutputs_; }
+    size_t getJsonOutputs() const { 
+        if (orderBook_) {
+            return orderBook_->getJsonOutputs();
+        }
+        return jsonOutputs_; 
+    }
 
 private:
     // Configuration
@@ -93,4 +98,5 @@ private:
     // JSON batching methods
     void addJsonToBuffer(const std::string& json);
     void flushJsonBuffer();
+    void flushJsonBufferInternal(); // Internal flush (assumes mutex is locked)
 };

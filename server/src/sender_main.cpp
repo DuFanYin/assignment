@@ -22,7 +22,7 @@ int main() {
     sender->setPort(8080);
 
     // Load data file
-    std::string dataFile = "/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn";
+    std::string dataFile = "data/CLX5_mbo.dbn";
     if (!sender->loadFromFile(dataFile)) {
         utils::logError("Failed to load data file: " + dataFile);
         return 1;

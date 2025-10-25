@@ -28,7 +28,7 @@ int main() {
     receiver->setTopLevels(10);
     receiver->setOutputFullBook(true);
     receiver->enableJsonOutput(true);
-    receiver->setJsonOutputFile("../data/order_book_output.json");
+    receiver->setJsonOutputFile("data/order_book_output.json");
     
     // Configure JSON batching for optimal performance
     receiver->setJsonBatchSize(5000);    // Batch 5000 JSON records (optimal)
@@ -39,7 +39,7 @@ int main() {
     std::cout << "📈 Symbol: CLX5" << std::endl;
     std::cout << "📊 Top Levels: 10" << std::endl;
     std::cout << "📋 Output Mode: Complete Order Book" << std::endl;
-    std::cout << "📁 JSON Output File: ../data/order_book_output.json" << std::endl;
+    std::cout << "📁 JSON Output File: data/order_book_output.json" << std::endl;
     std::cout << "🔄 Buffer: Simple 4KB buffer (proven approach)" << std::endl;
     std::cout << "📝 JSON Batching: 5000 records per batch, flush every 500" << std::endl;
     std::cout << std::endl;
@@ -69,7 +69,7 @@ int main() {
     std::cout << "📊 JSON Outputs Generated: " << receiver->getJsonOutputs() << std::endl;
     std::cout << "📈 Receiver Throughput: " << std::fixed << std::setprecision(2) 
               << receiver->getThroughput() << " messages/sec" << std::endl;
-    std::cout << "📁 JSON Output File: ../data/order_book_output.json" << std::endl;
+    std::cout << "📁 JSON Output File: data/order_book_output.json" << std::endl;
     std::cout << "✅ TCP reception and order book processing completed successfully!" << std::endl;
     return 0;
 }

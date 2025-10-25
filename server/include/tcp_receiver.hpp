@@ -93,4 +93,5 @@ private:
     // JSON batching methods
     void addJsonToBuffer(const std::string& json);
     void flushJsonBuffer();
+    void flushJsonBufferInternal(); // Internal flush (assumes mutex is locked)
 };

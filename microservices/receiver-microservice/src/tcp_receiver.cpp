@@ -22,8 +22,6 @@ TCPReceiver::~TCPReceiver() {
     if (receiving_) {
         stopReceiving();
     }
-    // Flush any remaining JSON data
-    flushJsonBuffer();
     cleanup();
 }
 
@@ -130,7 +128,7 @@ void TCPReceiver::startReceiving() {
     if (jsonOutputEnabled_) {
         orderBook_->setJsonCallback([this](const std::string& json) {
             addJsonToBuffer(json);
-            jsonOutputs_++;
+            // jsonOutputs_++; // Remove duplicate counting - already counted in order_book.hpp
         });
         orderBook_->setSymbol(symbol_);
         orderBook_->setTopLevels(topLevels_);
@@ -143,24 +141,28 @@ void TCPReceiver::startReceiving() {
 }
 
 void TCPReceiver::stopReceiving() {
-    if (!receiving_) {
-        return;
-    }
-    
+    // Set receiving flag to false
     receiving_ = false;
     
+    // Wait for receiving thread to finish
     if (receivingThread_.joinable()) {
         receivingThread_.join();
     }
     
-    // Flush any remaining JSON data before stopping
+    // CRITICAL: Always flush remaining JSON data, even if thread already stopped
     flushJsonBuffer();
     
+    // Force one more flush to ensure all data is written
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    flushJsonBuffer();
+    
+    // Close socket
     if (clientSocket_ != -1) {
         close(clientSocket_);
         clientSocket_ = -1;
     }
     
+    // Mark as disconnected
     connected_ = false;
 }
 
@@ -181,6 +183,9 @@ void TCPReceiver::receivingLoop() {
                 } else {
                     utils::logError("Error receiving data");
                 }
+                // Set flags to false so main thread knows we're done
+                receiving_ = false;
+                connected_ = false;
                 break;
             }
             
@@ -237,7 +242,19 @@ void TCPReceiver::receivingLoop() {
     std::cout << "Messages Received: " << receivedMessages_ << std::endl;
     std::cout << "Orders Processed: " << processedOrders_ << std::endl;
     if (jsonOutputEnabled_) {
-        std::cout << "JSON Records Generated: " << orderBook_->getJsonOutputs() << std::endl;
+        // Count actual records in the file for accurate reporting
+        std::ifstream file(jsonOutputFile_);
+        int actualRecords = 0;
+        if (file.is_open()) {
+            std::string line;
+            while (std::getline(file, line)) {
+                if (!line.empty()) {
+                    actualRecords++;
+                }
+            }
+            file.close();
+        }
+        std::cout << "JSON Records Generated: " << actualRecords << std::endl;
     }
     if (duration.count() > 0) {
         double messagesPerSecond = (double)receivedMessages_ * 1000.0 / duration.count();
@@ -324,14 +341,22 @@ void TCPReceiver::addJsonToBuffer(const std::string& json) {
     std::lock_guard<std::mutex> lock(jsonBufferMutex_);
     jsonBuffer_.push_back(json);
     
+    size_t currentSize = jsonBuffer_.size();
+    
     // Flush buffer when it reaches the batch size or flush interval
-    if (jsonBuffer_.size() >= jsonBatchSize_ || 
-        (jsonBuffer_.size() > 0 && jsonBuffer_.size() % jsonFlushInterval_ == 0)) {
-        flushJsonBuffer();
+    if (currentSize >= jsonBatchSize_ || 
+        (currentSize > 0 && currentSize % jsonFlushInterval_ == 0)) {
+        flushJsonBufferInternal(); // Call internal version (assumes lock is held)
     }
 }
 
 void TCPReceiver::flushJsonBuffer() {
+    std::lock_guard<std::mutex> lock(jsonBufferMutex_);
+    flushJsonBufferInternal();
+}
+
+void TCPReceiver::flushJsonBufferInternal() {
+    // This method assumes the mutex is already locked by the caller
     if (jsonBuffer_.empty()) {
         return;
     }
@@ -343,6 +368,7 @@ void TCPReceiver::flushJsonBuffer() {
             for (const auto& json : jsonBuffer_) {
                 file << json << std::endl;
             }
+            file.flush(); // Force flush to disk
             file.close();
         }
     }

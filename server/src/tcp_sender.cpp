@@ -177,7 +177,7 @@ void TCPSender::streamingLoop() {
     // Load and pre-parse the entire DBN file for maximum performance
     std::unique_ptr<databento::DbnFileStore> store;
     try {
-        store = std::make_unique<databento::DbnFileStore>("/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn");
+        store = std::make_unique<databento::DbnFileStore>("data/CLX5_mbo.dbn");
     } catch (const std::exception& e) {
         utils::logError("Failed to open DBN file: " + std::string(e.what()));
         return;

@@ -62,11 +62,40 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
+    // CRITICAL: Explicitly stop receiving to ensure final flush
+    receiver->stopReceiving();
+    
+    // Give time for final flush to complete
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Count actual records in the file to verify
+    std::ifstream checkFile("../data/order_book_output.json");
+    size_t actualFileRecords = 0;
+    if (checkFile.is_open()) {
+        std::string line;
+        while (std::getline(checkFile, line)) {
+            if (!line.empty()) {
+                actualFileRecords++;
+            }
+        }
+        checkFile.close();
+    }
+    
     // Print final summary
     std::cout << "\n=== PROCESSING COMPLETED ===" << std::endl;
     std::cout << "📊 Total Messages Received: " << receiver->getReceivedMessages() << std::endl;
     std::cout << "📊 Total Orders Processed: " << receiver->getProcessedOrders() << std::endl;
     std::cout << "📊 JSON Outputs Generated: " << receiver->getJsonOutputs() << std::endl;
+    std::cout << "📊 JSON Records in File: " << actualFileRecords << std::endl;
+    
+    if (actualFileRecords != receiver->getJsonOutputs()) {
+        std::cout << "⚠️  WARNING: File has " << actualFileRecords << " records but counter shows " 
+                  << receiver->getJsonOutputs() << " (difference: " 
+                  << static_cast<long>(receiver->getJsonOutputs() - actualFileRecords) << ")" << std::endl;
+    } else {
+        std::cout << "✅ All JSON records successfully written to file!" << std::endl;
+    }
+    
     std::cout << "📈 Receiver Throughput: " << std::fixed << std::setprecision(2) 
               << receiver->getThroughput() << " messages/sec" << std::endl;
     std::cout << "📁 JSON Output File: ../data/order_book_output.json" << std::endl;

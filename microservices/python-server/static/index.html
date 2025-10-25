@@ -245,6 +245,22 @@
                         <div class="stat-number" id="askLevels">0</div>
                         <div class="stat-label">Ask Levels</div>
                     </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="bestBid">-</div>
+                        <div class="stat-label">Best Bid</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="bestAsk">-</div>
+                        <div class="stat-label">Best Ask</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="bidAskSpread">0</div>
+                        <div class="stat-label">Bid-Ask Spread</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="orderProcessingRate">0</div>
+                        <div class="stat-label">Order Processing Rate</div>
+                    </div>
                 </div>
             </div>
             
@@ -327,6 +343,10 @@
             const activeOrders = document.getElementById('activeOrders');
             const bidLevels = document.getElementById('bidLevels');
             const askLevels = document.getElementById('askLevels');
+            const bestBid = document.getElementById('bestBid');
+            const bestAsk = document.getElementById('bestAsk');
+            const bidAskSpread = document.getElementById('bidAskSpread');
+            const orderProcessingRate = document.getElementById('orderProcessingRate');
             
             totalRecords.textContent = data.total_records || 0;
             
@@ -335,17 +355,32 @@
                 activeOrders.textContent = orderBookSummary.active_orders || 0;
                 bidLevels.textContent = orderBookSummary.bid_price_levels || 0;
                 askLevels.textContent = orderBookSummary.ask_price_levels || 0;
+                bestBid.textContent = orderBookSummary.best_bid || '-';
+                bestAsk.textContent = orderBookSummary.best_ask || '-';
+                bidAskSpread.textContent = orderBookSummary.bid_ask_spread || 0;
             } else if (data.final_order_book && data.final_order_book.stats) {
                 activeOrders.textContent = data.final_order_book.stats.total_orders || 0;
                 bidLevels.textContent = data.final_order_book.stats.bid_levels || 0;
                 askLevels.textContent = data.final_order_book.stats.ask_levels || 0;
+                bestBid.textContent = data.final_order_book.stats.best_bid || '-';
+                bestAsk.textContent = data.final_order_book.stats.best_ask || '-';
+                bidAskSpread.textContent = data.final_order_book.stats.bid_ask_spread || 0;
             } else if (data.data && data.data.length > 0) {
                 const lastRecord = data.data[data.data.length - 1];
                 if (lastRecord.stats) {
                     activeOrders.textContent = lastRecord.stats.total_orders || 0;
                     bidLevels.textContent = lastRecord.stats.bid_levels || 0;
                     askLevels.textContent = lastRecord.stats.ask_levels || 0;
+                    bestBid.textContent = lastRecord.stats.best_bid || '-';
+                    bestAsk.textContent = lastRecord.stats.best_ask || '-';
+                    bidAskSpread.textContent = lastRecord.stats.bid_ask_spread || 0;
                 }
+            }
+            
+            // Update order processing rate
+            if (data.receiver_stats && data.receiver_stats.processing_stats) {
+                const procStats = data.receiver_stats.processing_stats;
+                orderProcessingRate.textContent = Math.round(procStats.order_processing_rate || procStats.message_throughput || 0).toLocaleString();
             }
             
             stats.style.display = 'block';

@@ -56,51 +56,28 @@ tried using ringbuffer for IO buffer, no improvement
 
 python server to concnet c++ sender and reveiver(order book)
 
-=== TCP Market Data Sender ===
-🚀 High-Performance Market Data Streaming Server
-===============================================
-[INFO] Starting TCP market data sender...
-[INFO] Loaded file: /Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn (2140232 bytes)
-📁 Data File: /Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn
-🌐 Server Port: 8080
+50 mins
 
-[INFO] Starting TCP streaming server...
-[INFO] TCP server listening on port 8080
-[INFO] Waiting for client connection...
+containerise 3 micro servecies, too a while t debug cos configuration dont match
+
+
 
 === TCP Sender Final Statistics ===
-Streaming Time: 498 ms
+Streaming Time: 507 ms
 Messages Sent: 38212
-Throughput: 76731 messages/sec
+Throughput: 75369 messages/sec
 ===================================
 [INFO] Data transmission completed successfully!
-
-
-=== TCP Market Data Receiver with Order Book ===
-📊 High-Performance Order Book Reconstruction & JSON Output
-=========================================================
-[INFO] Starting TCP market data receiver...
-🌐 Server Host: 127.0.0.1
-🔌 Server Port: 8080
-📈 Symbol: CLX5
-📊 Top Levels: 10
-📋 Output Mode: Complete Order Book
-📁 JSON Output File: ../data/order_book_output.json
-🔄 Buffer: Simple 4KB buffer (proven approach)
-📝 JSON Batching: 5000 records per batch, flush every 500
-
-[INFO] Connecting to TCP sender...
-[INFO] Starting message reception and order book processing with JSON output...
 [INFO] Skipped 1000 orders due to missing references (normal for real market data)
 [INFO] Server closed connection
 
 === TCP Receiver Final Statistics ===
-Processing Time: 693 ms
+Processing Time: 702 ms
 Messages Received: 36988
 Orders Processed: 36988
 JSON Records Generated: 36988
-Message Throughput: 53374 messages/sec
-Order Processing Rate: 53374 orders/sec
+Message Throughput: 52689 messages/sec
+Order Processing Rate: 52689 orders/sec
 
 Final Order Book Summary:
   Active Orders: 147

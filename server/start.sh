@@ -6,12 +6,37 @@ cd "$SCRIPT_DIR"
 
 echo "🌐 Starting Order Book Microservices..."
 
-# Kill any existing processes first
-echo "🔄 Stopping existing processes..."
+# Kill any existing processes on the ports first
+echo "🔄 Stopping existing processes on ports..."
+
+# Kill process on port 8000 (Python server)
+PORT_8000_PID=$(lsof -ti:8000)
+if [ ! -z "$PORT_8000_PID" ]; then
+    echo "  Killing process on port 8000 (PID: $PORT_8000_PID)"
+    kill -9 $PORT_8000_PID 2>/dev/null || true
+fi
+
+# Kill process on port 8081 (Sender microservice)
+PORT_8081_PID=$(lsof -ti:8081)
+if [ ! -z "$PORT_8081_PID" ]; then
+    echo "  Killing process on port 8081 (PID: $PORT_8081_PID)"
+    kill -9 $PORT_8081_PID 2>/dev/null || true
+fi
+
+# Kill process on port 8082 (Receiver microservice)
+PORT_8082_PID=$(lsof -ti:8082)
+if [ ! -z "$PORT_8082_PID" ]; then
+    echo "  Killing process on port 8082 (PID: $PORT_8082_PID)"
+    kill -9 $PORT_8082_PID 2>/dev/null || true
+fi
+
+# Also kill by process name as backup
 pkill -f sender_microservice 2>/dev/null || true
 pkill -f receiver_microservice 2>/dev/null || true
 pkill -f "python main.py" 2>/dev/null || true
+
 sleep 2
+echo "✅ All ports cleared"
 
 # Check if Python is installed
 if ! command -v python3 &> /dev/null; then

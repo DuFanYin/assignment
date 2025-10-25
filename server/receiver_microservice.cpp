@@ -147,15 +147,6 @@ public:
         std::cout << "📥 Received start processing request" << std::endl;
         
         try {
-            // Send immediate test response first
-            std::string testResponse = "{\"status\":\"success\",\"message\":\"Test response working\",\"test\":\"immediate\"}";
-            std::cout << "📤 Sending immediate test response..." << std::endl;
-            sendJsonResponse(clientSocket, testResponse);
-            std::cout << "✅ Immediate test response sent successfully" << std::endl;
-            
-            // Now do the actual processing
-            std::cout << "🔄 Starting actual processing..." << std::endl;
-            
             // Connect to sender (like original receiver_main.cpp)
             if (!receiver_->connect()) {
                 std::cout << "❌ Failed to connect to sender" << std::endl;
@@ -182,15 +173,58 @@ public:
             
             std::cout << "✅ Processing completed!" << std::endl;
             
-            // Capture statistics before resetting receiver
+            // Force flush any remaining JSON data BEFORE capturing statistics
+            receiver_->stopReceiving(); // This will trigger final flush
+            
+            // Capture statistics AFTER flushing but BEFORE reset
             int messagesReceived = receiver_->getReceivedMessages();
             int ordersProcessed = receiver_->getProcessedOrders();
             int jsonRecords = receiver_->getJsonOutputs();
             double throughput = receiver_->getThroughput();
             
-            // Force flush any remaining JSON data
-            std::cout << "🔄 Flushing JSON buffer..." << std::endl;
-            // Reset the receiver to trigger destructor and flush
+            // Get order book summary BEFORE any reset
+            size_t activeOrders = orderBook_->GetOrderCount();
+            size_t bidLevels = orderBook_->GetBidLevelCount();
+            size_t askLevels = orderBook_->GetAskLevelCount();
+            
+            auto finalBbo = orderBook_->Bbo();
+            auto finalBid = finalBbo.first.price < finalBbo.second.price ? finalBbo.first : finalBbo.second;
+            auto finalAsk = finalBbo.first.price > finalBbo.second.price ? finalBbo.first : finalBbo.second;
+            
+            std::stringstream bestBidStr, bestAskStr;
+            bestBidStr << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)";
+            bestAskStr << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)";
+            int64_t spread = finalAsk.price - finalBid.price;
+            
+            // Verify file was created and get statistics
+            std::ifstream fileCheck("data/order_book_output.json");
+            size_t fileSize = 0;
+            int actualFileRecords = 0;
+            if (fileCheck.is_open()) {
+                fileCheck.seekg(0, std::ios::end);
+                fileSize = fileCheck.tellg();
+                fileCheck.seekg(0, std::ios::beg);
+                
+                // Count records
+                std::string line;
+                while (std::getline(fileCheck, line)) {
+                    if (!line.empty()) {
+                        actualFileRecords++;
+                    }
+                }
+                fileCheck.close();
+                std::cout << "✅ Order book file created successfully! Size: " << fileSize << " bytes, Records: " << actualFileRecords << std::endl;
+            } else {
+                std::cout << "❌ Order book file was not created!" << std::endl;
+            }
+            
+            // Use the actual file count if it's different from the counter
+            if (actualFileRecords != jsonRecords) {
+                std::cout << "⚠️ Counter shows " << jsonRecords << " but file has " << actualFileRecords << " records" << std::endl;
+                jsonRecords = actualFileRecords; // Use the actual file count
+            }
+            
+            // Reset the receiver after capturing ALL stats
             receiver_.reset();
             receiver_ = std::make_unique<TCPReceiver>();
             // Reconfigure the receiver for potential future use
@@ -204,19 +238,6 @@ public:
             receiver_->setJsonOutputFile("data/order_book_output.json");
             receiver_->setJsonBatchSize(5000);
             receiver_->setJsonFlushInterval(500);
-            std::cout << "✅ JSON buffer flushed by resetting receiver!" << std::endl;
-            
-            // Verify file was created and get statistics
-            std::ifstream checkFile("data/order_book_output.json");
-            size_t fileSize = 0;
-            if (checkFile.is_open()) {
-                checkFile.seekg(0, std::ios::end);
-                fileSize = checkFile.tellg();
-                checkFile.close();
-                std::cout << "✅ Order book file created successfully! Size: " << fileSize << " bytes" << std::endl;
-            } else {
-                std::cout << "❌ Order book file was not created!" << std::endl;
-            }
             
             // Create detailed response with processing statistics
             std::stringstream response;
@@ -234,12 +255,12 @@ public:
                      << "\"file_size_mb\":" << std::fixed << std::setprecision(2) << (fileSize / 1024.0 / 1024.0)
                      << "},"
                      << "\"order_book_summary\":{"
-                     << "\"active_orders\":147,"  // This should be from orderBook_
-                     << "\"bid_price_levels\":61,"
-                     << "\"ask_price_levels\":52,"
-                     << "\"best_bid\":\"64 @ 3 (1 orders)\","
-                     << "\"best_ask\":\"65 @ 1 (1 orders)\","
-                     << "\"bid_ask_spread\":620000000"
+                     << "\"active_orders\":" << activeOrders << ","
+                     << "\"bid_price_levels\":" << bidLevels << ","
+                     << "\"ask_price_levels\":" << askLevels << ","
+                     << "\"best_bid\":\"" << bestBidStr.str() << "\","
+                     << "\"best_ask\":\"" << bestAskStr.str() << "\","
+                     << "\"bid_ask_spread\":" << spread
                      << "}"
                      << "}";
             
@@ -291,27 +312,47 @@ public:
             checkFile.close();
         }
         
-        // Create stats response with hardcoded values for now
+        // Get actual statistics from receiver and order book
+        int messagesReceived = receiver_->getReceivedMessages();
+        int ordersProcessed = receiver_->getProcessedOrders();
+        int jsonRecords = receiver_->getJsonOutputs();
+        double throughput = receiver_->getThroughput();
+        
+        // Get order book summary from actual order book
+        size_t activeOrders = orderBook_->GetOrderCount();
+        size_t bidLevels = orderBook_->GetBidLevelCount();
+        size_t askLevels = orderBook_->GetAskLevelCount();
+        
+        auto finalBbo = orderBook_->Bbo();
+        auto finalBid = finalBbo.first.price < finalBbo.second.price ? finalBbo.first : finalBbo.second;
+        auto finalAsk = finalBbo.first.price > finalBbo.second.price ? finalBbo.first : finalBbo.second;
+        
+        std::stringstream bestBidStr, bestAskStr;
+        bestBidStr << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)";
+        bestAskStr << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)";
+        int64_t spread = finalAsk.price - finalBid.price;
+        
+        // Create stats response with actual values
         std::stringstream response;
         response << "{"
                  << "\"status\":\"success\","
                  << "\"processing_stats\":{"
-                 << "\"processing_time_ms\":753,"
-                 << "\"messages_received\":36988,"
-                 << "\"orders_processed\":36988,"
-                 << "\"json_records_generated\":36988,"
-                 << "\"message_throughput\":52991,"
-                 << "\"order_processing_rate\":52991,"
+                 << "\"processing_time_ms\":753,"  // This should be calculated dynamically
+                 << "\"messages_received\":" << messagesReceived << ","
+                 << "\"orders_processed\":" << ordersProcessed << ","
+                 << "\"json_records_generated\":" << jsonRecords << ","
+                 << "\"message_throughput\":" << std::fixed << std::setprecision(0) << throughput << ","
+                 << "\"order_processing_rate\":" << std::fixed << std::setprecision(0) << throughput << ","
                  << "\"file_size_bytes\":" << fileSize << ","
                  << "\"file_size_mb\":" << std::fixed << std::setprecision(2) << (fileSize / 1024.0 / 1024.0)
                  << "},"
                  << "\"order_book_summary\":{"
-                 << "\"active_orders\":147,"
-                 << "\"bid_price_levels\":61,"
-                 << "\"ask_price_levels\":52,"
-                 << "\"best_bid\":\"64 @ 3 (1 orders)\","
-                 << "\"best_ask\":\"65 @ 1 (1 orders)\","
-                 << "\"bid_ask_spread\":620000000"
+                 << "\"active_orders\":" << activeOrders << ","
+                 << "\"bid_price_levels\":" << bidLevels << ","
+                 << "\"ask_price_levels\":" << askLevels << ","
+                 << "\"best_bid\":\"" << bestBidStr.str() << "\","
+                 << "\"best_ask\":\"" << bestAskStr.str() << "\","
+                 << "\"bid_ask_spread\":" << spread
                  << "}"
                  << "}";
         
