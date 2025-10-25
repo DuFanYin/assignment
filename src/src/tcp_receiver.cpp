@@ -3,11 +3,14 @@
 #include <iostream>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <databento/pretty.hpp>
 
 TCPReceiver::TCPReceiver() 
-    : host_("127.0.0.1"), port_(8080), clientSocket_(-1), 
-      connected_(false), receiving_(false), receivedMessages_(0), processedOrders_(0) {
+    : host_("127.0.0.1"), port_(8080), orderBook_(nullptr), symbol_(""), 
+      topLevels_(10), outputFullBook_(true), jsonOutputEnabled_(false),
+      clientSocket_(-1), connected_(false), receiving_(false), 
+      receivedMessages_(0), processedOrders_(0), jsonOutputs_(0) {
 }
 
 TCPReceiver::~TCPReceiver() {
@@ -69,7 +72,7 @@ bool TCPReceiver::connect() {
         return false;
     }
     
-    utils::logInfo("Connected to server " + host_ + ":" + std::to_string(port_));
+    // Connected to server successfully
     
     // Send START_STREAMING signal
     const char* signal = "START_STREAMING";
@@ -81,7 +84,7 @@ bool TCPReceiver::connect() {
         return false;
     }
     
-    utils::logInfo("Sent START_STREAMING signal");
+    // START_STREAMING signal sent
     connected_ = true;
     return true;
 }
@@ -100,6 +103,24 @@ void TCPReceiver::startReceiving() {
     if (!orderBook_) {
         utils::logError("No order book set");
         return;
+    }
+    
+    // Configure order book for JSON output
+    if (jsonOutputEnabled_) {
+        orderBook_->setJsonCallback([this](const std::string& json) {
+            if (!jsonOutputFile_.empty()) {
+                std::ofstream file(jsonOutputFile_, std::ios::app);
+                if (file.is_open()) {
+                    file << json << std::endl;
+                    file.close();
+                }
+            }
+            jsonOutputs_++;
+        });
+        orderBook_->setSymbol(symbol_);
+        orderBook_->setTopLevels(topLevels_);
+        orderBook_->setOutputFullBook(outputFullBook_);
+        orderBook_->enableJsonOutput(true);
     }
     
     receiving_ = true;
@@ -126,12 +147,10 @@ void TCPReceiver::stopReceiving() {
 }
 
 void TCPReceiver::receivingLoop() {
-    utils::logInfo("Starting message reception and order book processing...");
-    startTime_ = std::chrono::high_resolution_clock::now();
-    
     // Use FULL message format with all 14 fields - same buffering as working streamer
     char buffer[4096];
     size_t bufferPos = 0;
+    bool timingStarted = false;
     
     try {
         while (receiving_) {
@@ -152,11 +171,20 @@ void TCPReceiver::receivingLoop() {
             while (bufferPos >= sizeof(MboMessage)) {
                 MboMessage* msg = reinterpret_cast<MboMessage*>(buffer);
                 
+                // Start timing on first message processed (consistent with sender)
+                if (!timingStarted) {
+                    startTime_ = std::chrono::high_resolution_clock::now();
+                    timingStarted = true;
+                }
+                
                 // Convert to databento::MboMsg and process through order book
                 try {
                     databento::MboMsg mbo = convertToMboMsg(*msg);
+                    
+                    // Process through order book (handles both processing and JSON output)
                     orderBook_->Apply(mbo);
                     processedOrders_++;
+                    
                 } catch (const std::invalid_argument& e) {
                     // Handle missing orders/levels gracefully - this is normal for real market data
                     std::string error_msg = e.what();
@@ -189,11 +217,14 @@ void TCPReceiver::receivingLoop() {
     endTime_ = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime_ - startTime_);
     
-    // Final statistics
+    // Final statistics - consolidated output
     std::cout << "\n=== TCP Receiver Final Statistics ===" << std::endl;
     std::cout << "Processing Time: " << duration.count() << " ms" << std::endl;
     std::cout << "Messages Received: " << receivedMessages_ << std::endl;
     std::cout << "Orders Processed: " << processedOrders_ << std::endl;
+    if (jsonOutputEnabled_) {
+        std::cout << "JSON Records Generated: " << orderBook_->getJsonOutputs() << std::endl;
+    }
     if (duration.count() > 0) {
         double messagesPerSecond = (double)receivedMessages_ * 1000.0 / duration.count();
         double ordersPerSecond = (double)processedOrders_ * 1000.0 / duration.count();
@@ -201,34 +232,24 @@ void TCPReceiver::receivingLoop() {
         std::cout << "Order Processing Rate: " << std::fixed << std::setprecision(0) << ordersPerSecond << " orders/sec" << std::endl;
     }
     
-    // Order book final statistics - same format as original main.cpp
+    // Order book final state
     if (orderBook_) {
-        std::cout << "\n=== Final Statistics ===" << std::endl;
-        std::cout << "Processing Time: " << duration.count() << " ms" << std::endl;
-        std::cout << "Processed Orders: " << processedOrders_ << std::endl;
-        if (duration.count() > 0) {
-            double ordersPerSecond = (double)processedOrders_ * 1000.0 / duration.count();
-            std::cout << "Processing Rate: " << std::fixed << std::setprecision(0) << ordersPerSecond << " orders/sec" << std::endl;
-        }
-        std::cout << "Final Order Book:" << std::endl;
-        std::cout << "  Total Orders: " << orderBook_->GetOrderCount() << std::endl;
-        std::cout << "  Bid Levels: " << orderBook_->GetBidLevelCount() << std::endl;
-        std::cout << "  Ask Levels: " << orderBook_->GetAskLevelCount() << std::endl;
+        std::cout << "\nFinal Order Book Summary:" << std::endl;
+        std::cout << "  Active Orders: " << orderBook_->GetOrderCount() << std::endl;
+        std::cout << "  Bid Price Levels: " << orderBook_->GetBidLevelCount() << std::endl;
+        std::cout << "  Ask Price Levels: " << orderBook_->GetAskLevelCount() << std::endl;
         
         auto finalBbo = orderBook_->Bbo();
-        // Note: Bbo() returns {bid, ask} but the order book seems to return them swapped
-        // Let's check which is actually bid vs ask by comparing prices
         auto finalBid = finalBbo.first.price < finalBbo.second.price ? finalBbo.first : finalBbo.second;
         auto finalAsk = finalBbo.first.price > finalBbo.second.price ? finalBbo.first : finalBbo.second;
         
         std::cout << "  Best Bid: " << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
         std::cout << "  Best Ask: " << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
-        std::cout << "  Spread: " << (finalAsk.price - finalBid.price) << std::endl;
-        std::cout << "========================" << std::endl;
+        std::cout << "  Bid-Ask Spread: " << (finalAsk.price - finalBid.price) << std::endl;
     }
     std::cout << "=====================================" << std::endl;
     
-    utils::logInfo("Message reception and order book processing completed!");
+    // Message reception and order book processing completed
 }
 
 bool TCPReceiver::receiveData(void* data, size_t size) {

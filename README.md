@@ -30,9 +30,19 @@ problem : many order id are not found or price level event not found, since the 
 quikc demo to do consuer producer to send mesge throuth tcp. initialy 40k~ messsge / sec. after apply ing some optimise tirck no improvement
 suspect the bottonle neck in IO. used zroe copy and cpu chche pripritsue, still no improment
 
+since im testing on local machine so although ringbuffer queue will help but also not implemted
+
+zero-copy technique did not help with performce, so removed as its casuing bug while toghert with batching, csauing memery aligment issues
+
+no preforame boost come from bathcing too
+
 20 mins
 
 updatet the previous mnimal approch, break it up into sneder reciver and process order book on receiver side same final order boook state as minial approch
+
+20 min 
+
+added json output feature into order book, standerad metics caltulation and output on sedner and receiver
 
 
 === TCP Receiver Final Statistics ===

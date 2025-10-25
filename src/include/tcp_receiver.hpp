@@ -10,7 +10,10 @@
 #include <netinet/tcp.h>
 #include <databento/record.hpp>
 #include <databento/enums.hpp>
+#include <databento/constants.hpp>
 #include "order_book.hpp"
+
+namespace db = databento;
 
 class TCPReceiver {
 public:
@@ -21,6 +24,11 @@ public:
     void setHost(const std::string& host) { host_ = host; }
     void setPort(int port) { port_ = port; }
     void setOrderBook(std::shared_ptr<Book> orderBook) { orderBook_ = orderBook; }
+    void setSymbol(const std::string& symbol) { symbol_ = symbol; }
+    void setTopLevels(size_t levels) { topLevels_ = levels; }
+    void setOutputFullBook(bool output) { outputFullBook_ = output; }
+    void enableJsonOutput(bool enable) { jsonOutputEnabled_ = enable; }
+    void setJsonOutputFile(const std::string& filename) { jsonOutputFile_ = filename; }
 
     // Connection and processing
     bool connect();
@@ -32,12 +40,18 @@ public:
     size_t getReceivedMessages() const { return receivedMessages_; }
     size_t getProcessedOrders() const { return processedOrders_; }
     double getThroughput() const;
+    size_t getJsonOutputs() const { return jsonOutputs_; }
 
 private:
     // Configuration
     std::string host_;
     int port_;
     std::shared_ptr<Book> orderBook_;
+    std::string symbol_;
+    size_t topLevels_;
+    bool outputFullBook_;
+    bool jsonOutputEnabled_;
+    std::string jsonOutputFile_;
     
     // Network
     int clientSocket_;
@@ -48,6 +62,7 @@ private:
     std::atomic<bool> receiving_;
     std::atomic<size_t> receivedMessages_;
     std::atomic<size_t> processedOrders_;
+    std::atomic<size_t> jsonOutputs_;
     std::thread receivingThread_;
     
     // Timing

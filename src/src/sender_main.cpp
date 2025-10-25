@@ -2,11 +2,15 @@
 #include <memory>
 #include <chrono>
 #include <iomanip>
+#include <thread>
 #include "tcp_sender.hpp"
 #include "utils.hpp"
 
 int main() {
     std::cout << "=== TCP Market Data Sender ===" << std::endl;
+    std::cout << "🚀 High-Performance Market Data Streaming Server" << std::endl;
+    std::cout << "===============================================" << std::endl;
+    
     utils::logInfo("Starting TCP market data sender...");
 
     // Create TCP sender
@@ -24,6 +28,10 @@ int main() {
         return 1;
     }
 
+    std::cout << "📁 Data File: " << dataFile << std::endl;
+    std::cout << "🌐 Server Port: 8080" << std::endl;
+    std::cout << std::endl;
+
     utils::logInfo("Starting TCP streaming server...");
     
     // Start streaming
@@ -34,6 +42,11 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
-    utils::logInfo("TCP streaming completed successfully!");
+    // Print comprehensive final summary
+    std::cout << "\n=== STREAMING COMPLETED ===" << std::endl;
+    std::cout << "📊 Total Messages Sent: " << sender->getSentMessages() << std::endl;
+    std::cout << "📈 Average Throughput: " << std::fixed << std::setprecision(2) 
+              << sender->getThroughput() << " messages/sec" << std::endl;
+    std::cout << "✅ TCP streaming completed successfully!" << std::endl;
     return 0;
 }

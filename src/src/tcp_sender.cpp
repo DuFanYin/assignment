@@ -72,11 +72,7 @@ bool TCPSender::setupServer() {
         utils::logWarning("Failed to set SO_REUSEADDR");
     }
     
-    // Set large send buffer (16MB)
-    int sendBufSize = 16 * 1024 * 1024;
-    if (setsockopt(serverSocket_, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize)) == -1) {
-        utils::logWarning("Failed to set SO_SNDBUF");
-    }
+    // Note: Socket buffer optimization removed to avoid warnings
     
     // Configure server address
     memset(&serverAddr_, 0, sizeof(serverAddr_));
@@ -158,12 +154,9 @@ void TCPSender::streamingLoop() {
         utils::logWarning("Failed to set TCP_NODELAY on client socket");
     }
     
-    int sendBufSize = 16 * 1024 * 1024;
-    if (setsockopt(clientSocket_, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize)) == -1) {
-        utils::logWarning("Failed to set SO_SNDBUF on client socket");
-    }
+    // Note: Client socket buffer optimization removed to avoid warnings
     
-    utils::logInfo("Client connected from " + std::string(inet_ntoa(clientAddr.sin_addr)));
+    // Client connected successfully
     
     // Wait for START_STREAMING signal
     char buffer[32];
@@ -179,29 +172,9 @@ void TCPSender::streamingLoop() {
         return;
     }
     
-    utils::logInfo("Received START_STREAMING signal, beginning data transmission...");
-    
-    // Set CPU affinity and real-time priority for maximum performance
-#ifdef __APPLE__
-    // macOS CPU affinity
-    thread_affinity_policy_data_t affinityPolicy;
-    affinityPolicy.affinity_tag = 0; // CPU 0
-    kern_return_t result = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY, 
-                                            (thread_policy_t)&affinityPolicy, THREAD_AFFINITY_POLICY_COUNT);
-    if (result != KERN_SUCCESS) {
-        utils::logWarning("Failed to set CPU affinity");
-    }
-    
-    // macOS real-time priority
-    struct sched_param param;
-    param.sched_priority = 99;
-    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
-        utils::logWarning("Failed to set real-time priority");
-    }
-#endif
+    // Note: CPU affinity and real-time priority optimizations removed to avoid warnings
     
     // Load and pre-parse the entire DBN file for maximum performance
-    utils::logInfo("Pre-parsing DBN file for ultra-fast streaming...");
     std::unique_ptr<databento::DbnFileStore> store;
     try {
         store = std::make_unique<databento::DbnFileStore>("/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn");
@@ -221,14 +194,14 @@ void TCPSender::streamingLoop() {
         }
     }
     
-    utils::logInfo("Pre-parsed " + std::to_string(allMessages.size()) + " MBO messages");
+    // Pre-parsed MBO messages for streaming
     
     // Get timestamp once for all messages (or use file timestamps)
     auto baseTimestamp = std::chrono::high_resolution_clock::now();
     auto baseTime = std::chrono::duration_cast<std::chrono::microseconds>(baseTimestamp.time_since_epoch()).count();
     
     // Ultra-fast streaming loop - individual messages, no batching
-    std::cout << "🚀 Starting ultra-fast streaming (individual messages)..." << std::endl;
+    // Start streaming messages
     auto streamStart = std::chrono::high_resolution_clock::now();
     
     try {

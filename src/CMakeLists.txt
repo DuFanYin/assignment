@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(MarketDataProcessor)
+project(OrderBookProcessor)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,7 +36,7 @@ set(SENDER_SOURCES
     ${COMMON_SOURCES}
 )
 
-# TCP receiver executable
+# TCP receiver executable (now with JSON output)
 set(RECEIVER_SOURCES
     src/receiver_main.cpp
     src/tcp_receiver.cpp
@@ -68,4 +68,4 @@ target_link_libraries(TCP_Receiver
 
 # Compiler flags
 target_compile_options(TCP_Sender PRIVATE -Wall -Wextra -O2)
-target_compile_options(TCP_Receiver PRIVATE -Wall -Wextra -O2)
+target_compile_options(TCP_Receiver PRIVATE -Wall -Wextra -O2 -march=native)

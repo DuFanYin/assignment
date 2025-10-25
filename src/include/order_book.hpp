@@ -19,6 +19,12 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <functional>
+#include <atomic>
+#include <mutex>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
 
 namespace db = databento;
 
@@ -39,6 +45,19 @@ inline std::ostream& operator<<(std::ostream& stream, const PriceLevel& level) {
 
 class Book {
  public:
+  // JSON callback type
+  using JsonCallback = std::function<void(const std::string&)>;
+  
+  // Configuration
+  void setJsonCallback(JsonCallback callback) { jsonCallback_ = callback; }
+  void setSymbol(const std::string& symbol) { symbol_ = symbol; }
+  void setTopLevels(size_t levels) { topLevels_ = levels; }
+  void setOutputFullBook(bool output) { outputFullBook_ = output; }
+  void enableJsonOutput(bool enable) { jsonOutputEnabled_ = enable; }
+  
+  // Statistics
+  size_t getJsonOutputs() const { return jsonOutputs_; }
+  
   std::pair<PriceLevel, PriceLevel> Bbo() const {
     return {GetBidLevel(), GetAskLevel()};
   }
@@ -170,6 +189,106 @@ class Book {
                                     db::ToString(mbo.action)};
       }
     }
+    
+    // Generate JSON output if enabled
+    if (jsonOutputEnabled_ && jsonCallback_) {
+      std::string json = generateJsonOutput(mbo);
+      jsonCallback_(json);
+      jsonOutputs_++;
+    }
+  }
+  
+  // JSON generation methods
+  std::string generateJsonOutput(const db::MboMsg& mbo) {
+    std::stringstream json;
+    json << "{";
+    
+    // Add symbol if set
+    if (!symbol_.empty()) {
+      json << "\"symbol\":\"" << symbol_ << "\",";
+    }
+    
+    // Add timestamp
+    json << "\"timestamp\":\"" << timestampToIso8601(mbo.hd.ts_event.time_since_epoch().count()) << "\",";
+    json << "\"timestamp_ns\":" << mbo.hd.ts_event.time_since_epoch().count() << ",";
+    
+    // Add best bid/ask
+    auto bbo = Bbo();
+    json << "\"bbo\":{";
+    if (bbo.first) {
+      json << "\"bid\":{\"price\":\"" << priceToString(bbo.first.price) << "\",\"size\":" << bbo.first.size << ",\"count\":" << bbo.first.count << "}";
+    } else {
+      json << "\"bid\":null";
+    }
+    json << ",";
+    if (bbo.second) {
+      json << "\"ask\":{\"price\":\"" << priceToString(bbo.second.price) << "\",\"size\":" << bbo.second.size << ",\"count\":" << bbo.second.count << "}";
+    } else {
+      json << "\"ask\":null";
+    }
+    json << "},";
+    
+    // Add top levels
+    json << "\"levels\":{";
+    json << "\"bids\":[";
+    for (size_t i = 0; i < topLevels_; ++i) {
+      auto bid = GetBidLevel(i);
+      if (!bid) break;
+      if (i > 0) json << ",";
+      json << "{\"price\":\"" << priceToString(bid.price) << "\",\"size\":" << bid.size << ",\"count\":" << bid.count << "}";
+    }
+    json << "],\"asks\":[";
+    for (size_t i = 0; i < topLevels_; ++i) {
+      auto ask = GetAskLevel(i);
+      if (!ask) break;
+      if (i > 0) json << ",";
+      json << "{\"price\":\"" << priceToString(ask.price) << "\",\"size\":" << ask.size << ",\"count\":" << ask.count << "}";
+    }
+    json << "]},";
+    
+    // Add statistics
+    json << "\"stats\":{";
+    json << "\"total_orders\":" << GetOrderCount() << ",";
+    json << "\"bid_levels\":" << GetBidLevelCount() << ",";
+    json << "\"ask_levels\":" << GetAskLevelCount();
+    json << "}";
+    
+    json << "}";
+    return json.str();
+  }
+  
+ private:
+  // JSON configuration
+  JsonCallback jsonCallback_;
+  std::string symbol_;
+  size_t topLevels_;
+  bool outputFullBook_;
+  bool jsonOutputEnabled_;
+  size_t jsonOutputs_;
+  
+  // Helper methods for JSON generation
+  std::string timestampToIso8601(uint64_t timestampNs) {
+    try {
+      // Convert nanoseconds to system_clock time_point
+      auto epoch = std::chrono::system_clock::time_point{};
+      auto timePoint = epoch + std::chrono::nanoseconds(timestampNs);
+      return db::ToIso8601(db::UnixNanos{timePoint});
+    } catch (...) {
+      // Fallback to simple formatting
+      auto seconds = timestampNs / 1000000000ULL;
+      auto nanos = timestampNs % 1000000000ULL;
+      std::stringstream ss;
+      ss << "1970-01-01T00:00:" << std::setfill('0') << std::setw(2) << (seconds % 60)
+         << "." << std::setw(9) << nanos << "Z";
+      return ss.str();
+    }
+  }
+  
+  std::string priceToString(int64_t price) {
+    if (price == db::kUndefPrice) {
+      return "null";
+    }
+    return db::pretty::PxToString(price);
   }
 
  private:
