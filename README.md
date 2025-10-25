@@ -21,11 +21,6 @@ Simple, single-machine implementation for local development and testing.
                            └──────────────┘
 ```
 
-**Best for:**
-- Local development and testing
-- Learning the core functionality
-- Debugging and performance analysis
-
 **Setup:** See [docs/SETUP_SRC.md](docs/SETUP_SRC.md)
 
 ---
@@ -51,11 +46,6 @@ Web-based interface with three microservices running on a single machine.
 │  :8081  │ │  :8082   │
 └─────────┘ └──────────┘
 ```
-
-**Best for:**
-- Interactive web-based monitoring
-- Single-machine deployment with web UI
-- Development and demonstration
 
 **Setup:** See [docs/SETUP_SERVER.md](docs/SETUP_SERVER.md)
 
@@ -86,12 +76,6 @@ Production-ready, containerized architecture with Docker.
     │Shared Volume │
     └──────────────┘
 ```
-
-**Best for:**
-- Production deployment
-- Cloud environments (AWS, GCP, Azure)
-- Scalable, isolated service architecture
-- CI/CD pipelines
 
 **Setup:** See [docs/SETUP_MICROSERVICES.md](docs/SETUP_MICROSERVICES.md)
 
@@ -199,73 +183,17 @@ Final Order Book Summary:
 
 ---
 
-## 📋 Quick Start Guide
+## 📁 Data File Setup
 
-Choose your preferred version:
+**IMPORTANT:** Before running any version, ensure the DBN market data file is in the correct location:
 
-### Standalone Version
-```bash
-cd src
-./start.sh
-```
+### Data File Locations
 
-### Server Version
-```bash
-cd server
-./start.sh
-# Browser opens to http://localhost:8000
-```
-
-### Microservices Version
-```bash
-cd microservices
-./start-docker.sh
-# Browser opens to http://localhost:8000
-```
-
----
-
-## 📚 Detailed Setup Instructions
-
-- **Standalone Version:** [docs/SETUP_SRC.md](docs/SETUP_SRC.md)
-- **Server Version:** [docs/SETUP_SERVER.md](docs/SETUP_SERVER.md)
-- **Microservices Version:** [docs/SETUP_MICROSERVICES.md](docs/SETUP_MICROSERVICES.md)
-
----
-
-## 🎯 Feature Comparison
-
-| Feature | Standalone | Server | Microservices |
-|---------|-----------|--------|---------------|
-| **Web Interface** | ❌ | ✅ | ✅ |
-| **Real-time Metrics** | Console only | Web UI | Web UI |
-| **Setup Complexity** | Simple | Medium | Simple (Docker) |
-| **Dependencies** | C++ only | C++ + Python | Docker |
-| **Isolation** | Single process | Multiple processes | Containers |
-| **Scalability** | Single machine | Single machine | Horizontal scaling |
-| **Production Ready** | ❌ | ⚠️ | ✅ |
-| **Cloud Deployment** | ❌ | ⚠️ | ✅ |
-| **Best Use Case** | Development | Demo/Testing | Production |
-
----
-
-## 🔧 System Requirements
-
-### All Versions
-- **OS:** Linux or macOS
-- **Compiler:** GCC 11+ or Clang 14+ with C++17 support
-- **CMake:** Version 3.15+
-- **Memory:** At least 2GB RAM
-- **Disk:** 500MB free space
-
-### Server Version (Additional)
-- **Python:** 3.8+
-- **pip:** Latest version
-
-### Microservices Version (Additional)
-- **Docker:** 20.10+
-- **Docker Compose:** 2.0+
-- **Memory:** 4GB RAM allocated to Docker
+| Version | Data File Path | Description |
+|---------|---------------|-------------|
+| **Standalone** (`/src/`) | `/src/data/CLX5_mbo.dbn` | Local data directory |
+| **Server** (`/server/`) | `/server/data/CLX5_mbo.dbn` | Server data directory |
+| **Microservices** (`/microservices/`) | `/microservices/shared-data/CLX5_mbo.dbn` | Shared Docker volume |
 
 ---
 
@@ -299,6 +227,51 @@ sudo make install
 ls /usr/local/include/databento/
 # Should see: record.hpp, enums.hpp, constants.hpp, etc.
 ```
+
+## 📚 Detailed Setup Instructions
+
+- **Standalone Version:** [docs/SETUP_SRC.md](docs/SETUP_SRC.md)
+- **Server Version:** [docs/SETUP_SERVER.md](docs/SETUP_SERVER.md)
+- **Microservices Version:** [docs/SETUP_MICROSERVICES.md](docs/SETUP_MICROSERVICES.md)
+
+---
+
+## 🎯 Feature Comparison
+
+| Feature | Standalone | Server | Microservices |
+|---------|-----------|--------|---------------|
+| **Web Interface** | ❌ | ✅ | ✅ |
+| **Real-time Metrics** | Console only | Web UI | Web UI |
+| **Setup Complexity** | Simple | Medium | Simple (Docker) |
+| **Dependencies** | C++ only | C++ + Python | Docker |
+| **Isolation** | Single process | Multiple processes | Containers |
+| **Scalability** | Single machine | Single machine | Horizontal scaling |
+| **Production Ready** | ❌ | ⚠️ | ✅ |
+| **Cloud Deployment** | ❌ | ⚠️ | ✅ |
+
+---
+
+## 🔧 System Requirements
+
+### All Versions
+- **OS:** Linux or macOS
+- **Compiler:** GCC 11+ or Clang 14+ with C++17 support
+- **CMake:** Version 3.15+
+- **Memory:** At least 2GB RAM
+- **Disk:** 500MB free space
+
+### Server Version (Additional)
+- **Python:** 3.8+
+- **pip:** Latest version
+
+### Microservices Version (Additional)
+- **Docker:** 20.10+
+- **Docker Compose:** 2.0+
+- **Memory:** 4GB RAM allocated to Docker
+
+---
+
+
 
 
 ## 📖 Architecture Overview

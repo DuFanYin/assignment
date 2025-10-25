@@ -55,9 +55,7 @@ Ensure the DBN market data file is in the correct location:
 📁 /Users/hang/github_repo/assignment/microservices/shared-data/CLX5_mbo.dbn
 ```
 
-**If the file is missing, copy it from:**
-- `/src/data/CLX5_mbo.dbn` 
-- OR `/server/data/CLX5_mbo.dbn`
+> **📁 For detailed data file setup instructions:** See main [README.md - Data File Setup](../README.md#-data-file-setup)
 
 ### Step 2: Run the Start Script
 

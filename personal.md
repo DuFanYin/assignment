@@ -1,10 +1,10 @@
 # assignment
 
 AI tools used
-    ChatGpt and cursor
+    ChatGPT and Cursor
 
-    gpt has more contextual knowledge so better to use when have architecture design 
-    cursor is better for pure coding logic/syntax question
+    GPT has more contextual knowledge so better to use when have architecture design 
+    Cursor is better for pure coding logic/syntax questions, auto for majority of time, use Claude 4.5 when JSON bug couldn't be fixed
 
 1.5 hr ~ 2h
 
@@ -73,7 +73,9 @@ basically the approach is to start from simple minimal pipeline to build it up s
 
 microservice version the performance dropped significantly I assume coming from container overhead
 
-both server and microservice version will send entire json from backend, using a 4th service to create database, batching storing and write into db will be much faster in response time
+both server and microservice version will send entire json from backend, using a 4th service to create database and volume, batching storing and write into db will be much faster in response time
+
+also server implementation is extremely simple, for expansion would let python server spin up multiple order book instances and have a sender to send data depending on time frame and other parameters.
 
 for other minor tasks such as test/ci/cd, for the purpose of this assignment I focused on more architecture related parts, with enough time I can definitely do all of them
 

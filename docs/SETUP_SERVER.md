@@ -46,6 +46,8 @@ The DBN market data file should be at:
 📁 /Users/hang/github_repo/assignment/server/data/CLX5_mbo.dbn
 ```
 
+> **📁 For detailed data file setup instructions:** See main [README.md - Data File Setup](../README.md#-data-file-setup)
+
 ### Step 4: Run the Start Script
 
 ```bash
