@@ -69,7 +69,9 @@ to fix metrics calculation and display bug
 
 thoughts
 
-basically the approach is to start from simple minimal pipeline to build it up step by step, in the end when the json saving bug and display bug happened, just use older and simpler version to identify the error so it's easier to know what went wrong
+most of the concepts in the assignment is not new for me although I haven't had chance to use some of them in real projects. In terms of design I made a lot of assumption how a real system would work. (eg loha.botonics)
+
+basically the approach to build this is to start from simple minimal pipeline to build it up step by step, in the end when the json saving bug and display bug happened, just use older and simpler version to identify the error so it's easier to know what went wrong
 
 microservice version the performance dropped significantly I assume coming from container overhead
 
@@ -77,7 +79,7 @@ both server and microservice version will send entire json from backend, using a
 
 also server implementation is extremely simple, for expansion would let python server spin up multiple order book instances and have a sender to send data depending on time frame and other parameters.
 
-for other minor tasks such as test/ci/cd, for the purpose of this assignment I focused on more architecture related parts, with enough time I can definitely do all of them
+for other minor tasks such as test/ci/cd, i have used those in my project before, for the purpose of this assignment I focused on more architecture related parts, with enough time I can definitely do all of them
 
 
 metrics from server version
