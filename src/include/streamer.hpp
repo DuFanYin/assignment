@@ -26,6 +26,9 @@ public:
 
     // Statistics
     size_t getProcessedOrders() const { return processedOrders_; }
+    
+    // Single-threaded access method
+    const databento::Record* getNextRecord();
 
 private:
     OrderCallback orderCallback_;

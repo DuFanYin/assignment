@@ -1,3 +1,5 @@
+#pragma once
+
 #include <algorithm>
 #include <cstdint>
 #include <databento/constants.hpp>  // dataset, kUndefPrice
@@ -29,7 +31,7 @@ struct PriceLevel {
   operator bool() const { return !IsEmpty(); }
 };
 
-std::ostream& operator<<(std::ostream& stream, const PriceLevel& level) {
+inline std::ostream& operator<<(std::ostream& stream, const PriceLevel& level) {
   stream << level.size << " @ " << db::pretty::Px{level.price} << " | "
          << level.count << " order(s)";
   return stream;

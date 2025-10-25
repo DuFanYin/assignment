@@ -76,6 +76,13 @@ void Streamer::stopStreaming() {
     utils::logInfo("Stopping data stream...");
 }
 
+const databento::Record* Streamer::getNextRecord() {
+    if (!store_) {
+        return nullptr;
+    }
+    return store_->NextRecord();
+}
+
 Order Streamer::convertMboToOrder(const databento::MboMsg& mbo) {
     Order order;
     
