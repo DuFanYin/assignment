@@ -4,7 +4,7 @@
 
 namespace db = databento;
 
-// Lightweight message structure for ring buffer
+// Lightweight message structure for TCP communication
 struct MboMessage {
     uint64_t ts_event;
     uint64_t ts_recv;

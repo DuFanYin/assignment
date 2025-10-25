@@ -15,7 +15,6 @@
 #include <databento/enums.hpp>
 #include <databento/constants.hpp>
 #include "order_book.hpp"
-#include "RingBuffer.hpp"
 #include "message_types.hpp"
 
 namespace db = databento;
@@ -83,18 +82,6 @@ private:
     // Timing
     std::chrono::high_resolution_clock::time_point startTime_;
     std::chrono::high_resolution_clock::time_point endTime_;
-    
-    // Using MboMessage from message_types.hpp
-    
-    // Simple message format for high-performance streaming
-    struct SimpleMboMessage {
-        uint64_t timestamp;
-        uint64_t order_id;
-        uint64_t price;
-        uint32_t size;
-        uint8_t action;
-        uint8_t side;
-    } __attribute__((packed));
     
     // Methods
     bool setupConnection();

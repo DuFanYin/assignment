@@ -36,11 +36,10 @@ set(SENDER_SOURCES
     ${COMMON_SOURCES}
 )
 
-# TCP receiver executable (now with queue-based processing)
+# TCP receiver executable (simplified without queue processing)
 set(RECEIVER_SOURCES
     src/receiver_main.cpp
     src/tcp_receiver.cpp
-    src/queue_sender.cpp
     ${COMMON_SOURCES}
 )
 

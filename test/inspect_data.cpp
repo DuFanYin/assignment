@@ -7,7 +7,7 @@
 using namespace databento;
 
 int main() {
-    const std::string path = "../../src/data/CLX5_mbo.dbn";  // adjust to your path
+    const std::string path = "../src/data/CLX5_mbo.dbn";  // Correct relative path
     std::cout << "📂 Reading DBN file: " << path << std::endl;
 
     try {

@@ -35,8 +35,8 @@ int main() {
     sender->setBatchMode(true); // Enable batch streaming
     sender->setBatchSize(1000); // Send 1000 messages per batch
     
-    // Load data file (same as our main processor)
-    std::string dataFile = "/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn";
+    // Load data file (correct relative path)
+    std::string dataFile = "../../src/data/CLX5_mbo.dbn";
     if (!sender->loadFromFile(dataFile)) {
         std::cerr << "❌ Failed to load data file: " << dataFile << std::endl;
         std::cerr << "💡 Make sure the file exists and is readable" << std::endl;
