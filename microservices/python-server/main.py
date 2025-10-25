@@ -132,6 +132,12 @@ async def start_streaming():
         }
         
         print(f"✅ Returning result with {len(order_book_data)} records")
+        print(f"📊 DEBUG - receiver_stats structure:")
+        print(f"   Keys: {list(receiver_data.keys())}")
+        if 'processing_stats' in receiver_data:
+            print(f"   processing_stats: {receiver_data['processing_stats']}")
+        if 'order_book_summary' in receiver_data:
+            print(f"   order_book_summary: {receiver_data['order_book_summary']}")
         return result
         
     except requests.exceptions.RequestException as e:

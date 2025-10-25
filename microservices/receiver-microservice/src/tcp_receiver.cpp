@@ -321,8 +321,9 @@ databento::MboMsg TCPReceiver::convertToDatabentoMbo(const MboMessage& msg) {
 double TCPReceiver::getThroughput() const {
     if (receivedMessages_ == 0) return 0.0;
     
-    auto now = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime_);
+    // Use endTime_ if available (after processing completed), otherwise use current time
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - startTime_);
     
     if (duration.count() == 0) return 0.0;
     
