@@ -1,0 +1,84 @@
+services:
+  # Python Server Microservice (Port 8000)
+  python-server:
+    build:
+      context: ./python-server
+      dockerfile: Dockerfile
+    container_name: orderbook-python-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - shared-data:/app/data
+    environment:
+      - SENDER_SERVICE_URL=http://sender-microservice:8081
+      - RECEIVER_SERVICE_URL=http://receiver-microservice:8082
+    depends_on:
+      - sender-microservice
+      - receiver-microservice
+    networks:
+      - orderbook-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # C++ Sender Microservice (Port 8081)
+  sender-microservice:
+    build:
+      context: ./sender-microservice
+      dockerfile: Dockerfile
+    container_name: orderbook-sender
+    ports:
+      - "8081:8081"
+    volumes:
+      - shared-data:/app/data
+    environment:
+      - DATA_FILE_PATH=/app/data/CLX5_mbo.dbn
+    networks:
+      - orderbook-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # C++ Receiver Microservice (Port 8082)
+  receiver-microservice:
+    build:
+      context: ./receiver-microservice
+      dockerfile: Dockerfile
+    container_name: orderbook-receiver
+    ports:
+      - "8082:8082"
+    volumes:
+      - shared-data:/app/data
+    environment:
+      - OUTPUT_FILE_PATH=/app/data/order_book_output.json
+    networks:
+      - orderbook-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# Shared data volume
+volumes:
+  shared-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/shared-data
+
+# Custom network for service communication
+networks:
+  orderbook-network:
+    driver: bridge
