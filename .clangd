@@ -1,0 +1,13 @@
+CompileFlags:
+  Add: 
+    - -I../databento-cpp/include
+    - -I../databento-cpp/build/include
+    - -I../databento-cpp/build/_deps/date_src-src/include
+    - -I../databento-cpp/build/_deps/httplib-src
+    - -I../databento-cpp/build/_deps/json-src/include
+    - -std=c++17
+    - -Wall
+    - -Wextra
+    - -Wno-unused-parameter
+    - -Wno-missing-field-initializers
+

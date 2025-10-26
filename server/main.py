@@ -43,55 +43,31 @@ async def start_streaming():
         if output_file.exists():
             output_file.unlink()
         
-        print("🚀 Starting C++ microservices...")
-        
-        # Step 1: Call Sender Microservice to start streaming (persistent)
-        print("📡 Starting Sender Microservice...")
+        # Step 1: Start sender
+        print("📡 Starting sender...")
         sender_response = requests.post("http://127.0.0.1:8081/start-streaming", timeout=60)
         
         if sender_response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Sender microservice failed: {sender_response.text}")
         
         sender_data = sender_response.json()
-        print(f"✅ Sender started: {sender_data.get('message', 'Unknown')}")
-        
-        # Give sender time to start TCP server
-        print("⏳ Waiting for sender to start TCP server...")
+        print(f"✅ Sender: {sender_data.get('message', 'OK')}")
         time.sleep(2)
         
-        # Step 2: Call Receiver Microservice to process data
-        print("📥 Starting Receiver Microservice...")
-        try:
-            print("📥 Making HTTP request to receiver...")
-            receiver_response = requests.post("http://127.0.0.1:8082/start-processing", timeout=120)
-            print(f"📥 Receiver response status: {receiver_response.status_code}")
-            print(f"📥 Receiver response text: {receiver_response.text[:200]}...")
-        except Exception as e:
-            print(f"❌ Receiver request failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Receiver microservice failed: {e}")
+        # Step 2: Start receiver
+        print("📥 Starting receiver...")
+        receiver_response = requests.post("http://127.0.0.1:8082/start-processing", timeout=120)
         
         if receiver_response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Receiver microservice failed: {receiver_response.text}")
         
         receiver_data = receiver_response.json()
-        print(f"✅ Receiver completed: {receiver_data.get('message', 'Unknown')}")
-        
-        # Give receiver time to finish writing the order book file
-        print("⏳ Waiting for order book file to be written...")
+        print(f"✅ Receiver: {receiver_data.get('message', 'OK')}")
         time.sleep(3)
         
-        # Don't call /stats - we already have all the data from /start-processing
-        # The /stats endpoint would return data from the RESET receiver (zeros)
-        
-        # Step 3: Get Order Book Data
-        print("📊 Retrieving order book data...")
-        try:
-            order_book_response = requests.get("http://127.0.0.1:8082/order-book", timeout=10)
-            print(f"📊 Order book response status: {order_book_response.status_code}")
-            print(f"📊 Order book response length: {len(order_book_response.text)}")
-        except Exception as e:
-            print(f"❌ Order book request failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to get order book: {e}")
+        # Step 3: Get order book
+        print("📊 Getting order book...")
+        order_book_response = requests.get("http://127.0.0.1:8082/order-book", timeout=10)
         
         if order_book_response.status_code != 200:
             raise HTTPException(status_code=500, detail=f"Failed to get order book: {order_book_response.text}")
@@ -119,15 +95,20 @@ async def start_streaming():
             "final_order_book": final_state,
             "sender_stats": sender_data,
             "receiver_stats": receiver_data,
-            "data": order_book_data  # Add the actual order book data
+            "data": order_book_data
         }
         
-        print(f"✅ Returning result with {len(order_book_data)} records")
+        print(f"✅ Complete: {len(order_book_data)} records")
         return result
         
     except requests.exceptions.RequestException as e:
+        print(f"❌ Connection failed: {str(e)}")
+        print("\nTo debug, check logs:")
+        print("  tail -n 50 sender.log")
+        print("  tail -n 50 receiver.log")
         raise HTTPException(status_code=500, detail=f"Microservice communication failed: {str(e)}")
     except Exception as e:
+        print(f"❌ Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @app.get("/api/order-book")
@@ -204,10 +185,6 @@ async def get_microservices_status():
     return status
 
 if __name__ == "__main__":
-    print("🌐 Starting Order Book Streamer Server...")
-    print("📊 FastAPI backend with C++ order book integration")
-    print("🔗 Access the web interface at: http://localhost:8000")
-    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

@@ -6,98 +6,69 @@ cd "$SCRIPT_DIR"
 
 echo "🌐 Starting Order Book Microservices..."
 
-# Kill any existing processes on the ports first
-echo "🔄 Stopping existing processes on ports..."
-
-# Kill process on port 8000 (Python server)
-PORT_8000_PID=$(lsof -ti:8000)
-if [ ! -z "$PORT_8000_PID" ]; then
-    echo "  Killing process on port 8000 (PID: $PORT_8000_PID)"
-    kill -9 $PORT_8000_PID 2>/dev/null || true
-fi
-
-# Kill process on port 8081 (Sender microservice)
-PORT_8081_PID=$(lsof -ti:8081)
-if [ ! -z "$PORT_8081_PID" ]; then
-    echo "  Killing process on port 8081 (PID: $PORT_8081_PID)"
-    kill -9 $PORT_8081_PID 2>/dev/null || true
-fi
-
-# Kill process on port 8082 (Receiver microservice)
-PORT_8082_PID=$(lsof -ti:8082)
-if [ ! -z "$PORT_8082_PID" ]; then
-    echo "  Killing process on port 8082 (PID: $PORT_8082_PID)"
-    kill -9 $PORT_8082_PID 2>/dev/null || true
-fi
-
-# Also kill by process name as backup
+# Kill any existing processes
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+lsof -ti:8081 | xargs kill -9 2>/dev/null || true
+lsof -ti:8082 | xargs kill -9 2>/dev/null || true
 pkill -f sender_microservice 2>/dev/null || true
 pkill -f receiver_microservice 2>/dev/null || true
 pkill -f "python main.py" 2>/dev/null || true
 
-sleep 2
-echo "✅ All ports cleared"
-
-# Check if Python is installed
+echo "📋 Checking dependencies..."
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed. Please install Python 3 first."
+    echo "❌ Python 3 is not installed."
     exit 1
 fi
 
-# Check if pip is installed
-if ! command -v pip3 &> /dev/null; then
-    echo "❌ pip3 is not installed. Please install pip3 first."
-    exit 1
-fi
-
-# Install requirements if needed
+# Initialize virtual environment
 if [ ! -d "venv" ]; then
     echo "📦 Creating virtual environment..."
     python3 -m venv venv
 fi
 
-echo "🔧 Activating virtual environment..."
 source venv/bin/activate
 
-echo "📥 Installing Python dependencies..."
+# Install requirements if needed
 if ! pip show fastapi > /dev/null 2>&1; then
+    echo "📥 Installing dependencies..."
     pip install -r requirements.txt
-else
-    echo "✅ Python dependencies already installed"
 fi
 
 # Build C++ microservices
-echo "🛠️ Building C++ microservices..."
+echo "🔨 Building C++ microservices..."
 mkdir -p build
 cd build
-cmake ..
-make
+if [ ! -f "CMakeCache.txt" ]; then
+    cmake ..
+fi
+make -j4
 cd ..
 
-# Start C++ Sender Microservice in background (from server directory)
-echo "🚀 Starting C++ Sender Microservice (port 8081)..."
-(cd . && ./build/sender_microservice) &
+# Start microservices in background (logs visible on terminal)
+echo "🚀 Starting sender microservice (port 8081)..."
+./build/sender_microservice &
 SENDER_PID=$!
-echo "Sender Microservice started with PID: $SENDER_PID"
 
-# Start C++ Receiver Microservice in background (from server directory)
-echo "📥 Starting C++ Receiver Microservice (port 8082)..."
-(cd . && ./build/receiver_microservice) &
+echo "📥 Starting receiver microservice (port 8082)..."
+./build/receiver_microservice &
 RECEIVER_PID=$!
-echo "Receiver Microservice started with PID: $RECEIVER_PID"
 
-# Wait a moment for services to start
+echo "⏳ Waiting for microservices to start..."
 sleep 2
 
-# Start the FastAPI application
-echo "🚀 Starting FastAPI application (port 8000)..."
-echo "🔗 Access the web interface at: http://localhost:8000"
-echo "📚 API documentation at: http://localhost:8000/docs"
-echo ""
-echo "Microservices:"
-echo "  📡 Sender Service: http://localhost:8081"
-echo "  📥 Receiver Service: http://localhost:8082"
-echo "  🌐 Python Server: http://localhost:8000"
+# Check if microservices started successfully
+if ! kill -0 $SENDER_PID 2>/dev/null; then
+    echo "❌ Sender failed to start"
+    exit 1
+fi
+
+if ! kill -0 $RECEIVER_PID 2>/dev/null; then
+    echo "❌ Receiver failed to start"
+    exit 1
+fi
+
+# Start FastAPI
+echo "🌐 Starting FastAPI server on http://localhost:8000"
 echo ""
 
 python main.py

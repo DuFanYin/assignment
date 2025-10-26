@@ -16,8 +16,22 @@
 #include <databento/constants.hpp>
 #include "order_book.hpp"
 #include "message_types.hpp"
+#include "ring_buffer.hpp"
+#include <databento/datetime.hpp>
+#include <sstream>
 
 namespace db = databento;
+
+// Message wrapper for ring buffer
+struct MboMessageWrapper {
+    db::MboMsg mbo;
+    std::chrono::high_resolution_clock::time_point timestamp;
+    
+    MboMessageWrapper() = default;
+    MboMessageWrapper(const db::MboMsg& msg) : mbo(msg) {
+        timestamp = std::chrono::high_resolution_clock::now();
+    }
+};
 
 class TCPReceiver {
 public:
@@ -78,6 +92,10 @@ private:
     std::atomic<size_t> processedOrders_;
     std::atomic<size_t> jsonOutputs_;
     std::thread receivingThread_;
+    std::thread jsonGenerationThread_;  // Separate thread for JSON generation
+    
+    // Ring buffer for decoupling order book processing from JSON generation
+    std::unique_ptr<RingBuffer<MboMessageWrapper>> jsonRingBuffer_;
     
     // Timing
     std::chrono::high_resolution_clock::time_point startTime_;
@@ -86,6 +104,8 @@ private:
     // Methods
     bool setupConnection();
     void receivingLoop();
+    void jsonGenerationLoop();  // Runs in separate thread to generate JSON
+    std::string generateJsonOutput(const db::MboMsg& mbo);  // Generate JSON from order book
     bool receiveData(void* data, size_t size);
     databento::MboMsg convertToDatabentoMbo(const MboMessage& msg);
     void cleanup();

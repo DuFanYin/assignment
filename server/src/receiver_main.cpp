@@ -40,7 +40,8 @@ int main() {
     std::cout << "📊 Top Levels: 10" << std::endl;
     std::cout << "📋 Output Mode: Complete Order Book" << std::endl;
     std::cout << "📁 JSON Output File: data/order_book_output.json" << std::endl;
-    std::cout << "🔄 Buffer: Simple 4KB buffer (proven approach)" << std::endl;
+    std::cout << "🔄 Buffer: 128KB TCP buffer" << std::endl;
+    std::cout << "⚡ JSON Processing: Separate thread (ring buffer decouples from TCP)" << std::endl;
     std::cout << "📝 JSON Batching: 5000 records per batch, flush every 500" << std::endl;
     std::cout << std::endl;
 

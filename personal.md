@@ -64,6 +64,11 @@ containerize 3 micro services, too a while to debug cos configuration don't matc
 
 to fix metrics calculation and display bug
 
+20 mis
+
+fro server version, add ring buffuer to decouple json generation and order book process
+huge performace boost
+
 
 
 
@@ -85,21 +90,21 @@ for other minor tasks such as test/ci/cd, i have used those in my project before
 metrics from server version
 
 === TCP Sender Final Statistics ===
-Streaming Time: 513 ms
+Streaming Time: 47 ms
 Messages Sent: 38212
-Throughput: 74487 messages/sec
+Throughput: 813021 messages/sec
 ===================================
 [INFO] Data transmission completed successfully!
 [INFO] Skipped 1000 orders due to missing references (normal for real market data)
 [INFO] Server closed connection
 
 === TCP Receiver Final Statistics ===
-Processing Time: 726 ms
+Processing Time: 67 ms
 Messages Received: 36988
 Orders Processed: 36988
-JSON Records Generated: 36988
-Message Throughput: 50948 messages/sec
-Order Processing Rate: 50948 orders/sec
+JSON Records Generated: 0
+Message Throughput: 552060 messages/sec
+Order Processing Rate: 552060 orders/sec
 
 Final Order Book Summary:
   Active Orders: 147

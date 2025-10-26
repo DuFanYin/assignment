@@ -13,7 +13,7 @@
 #endif
 
 TCPSender::TCPSender() 
-    : port_(8080), delayMs_(0), zeroCopyMode_(false), 
+    : port_(8080), delayMs_(0), zeroCopyMode_(false), batchSize_(100),
       serverSocket_(-1), clientSocket_(-1), fileDescriptor_(-1),
       mappedFile_(nullptr), fileSize_(0), streaming_(false), sentMessages_(0) {
 }
@@ -196,7 +196,11 @@ void TCPSender::streamingLoop() {
     
     // Pre-parsed MBO messages for streaming
     
-    // Ultra-fast streaming loop - individual messages, no batching
+    // Batch I/O with writev for maximum throughput (3-10× reduction in system calls)
+    // Instead of 1 system call per message, send batchSize_ messages per system call
+    std::vector<MboMessage> batchBuffer;
+    batchBuffer.reserve(batchSize_);
+    
     // Start streaming messages
     auto streamStart = std::chrono::high_resolution_clock::now();
     
@@ -204,19 +208,45 @@ void TCPSender::streamingLoop() {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {
             const auto& mbo = allMessages[i];
             
-            // Send message with ORIGINAL timestamp to preserve file order
+            // Prepare message with ORIGINAL timestamp to preserve file order
             uint64_t originalTimestamp = mbo.hd.ts_event.time_since_epoch().count();
-            if (!sendMboMessageFast(clientSocket_, mbo, originalTimestamp)) {
-                utils::logError("Failed to send message " + std::to_string(i));
-                break;
-            }
+            MboMessage msg;
+            msg.ts_event = originalTimestamp;
+            msg.ts_recv = originalTimestamp + 1;
+            msg.rtype = static_cast<uint8_t>(mbo.hd.rtype);
+            msg.publisher_id = mbo.hd.publisher_id;
+            msg.instrument_id = mbo.hd.instrument_id;
+            msg.action = static_cast<uint8_t>(mbo.action);
+            msg.side = static_cast<uint8_t>(mbo.side);
+            msg.price = mbo.price;
+            msg.size = mbo.size;
+            msg.channel_id = mbo.channel_id;
+            msg.order_id = mbo.order_id;
+            msg.flags = static_cast<uint8_t>(mbo.flags);
+            msg.ts_in_delta = mbo.ts_in_delta.count();
+            msg.sequence = mbo.sequence;
             
+            batchBuffer.push_back(msg);
             sentMessages_++;
+            
+            // Send batch when buffer is full (single writev system call for batchSize_ messages)
+            if (batchBuffer.size() >= batchSize_) {
+                if (!sendBatchMessages(clientSocket_, batchBuffer)) {
+                    utils::logError("Failed to send batch at message " + std::to_string(i));
+                    break;
+                }
+                batchBuffer.clear();
+            }
             
             // Optional delay (set to 0 for maximum throughput)
             if (delayMs_ > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
             }
+        }
+        
+        // Send any remaining messages in the buffer
+        if (!batchBuffer.empty() && sendBatchMessages(clientSocket_, batchBuffer)) {
+            batchBuffer.clear();
         }
     } catch (const std::exception& e) {
         utils::logError("Error during streaming: " + std::string(e.what()));
@@ -282,6 +312,32 @@ bool TCPSender::sendMboMessageFast(int clientSocket, const databento::MboMsg& mb
     
     // Send complete message directly - same approach as working streamer
     return sendData(clientSocket, &msg, sizeof(msg));
+}
+
+bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages) {
+    if (messages.empty()) {
+        return true;
+    }
+    
+    // Prepare iovec array for writev (scatter-gather I/O)
+    // This allows sending multiple non-contiguous buffers in a single system call
+    std::vector<struct iovec> iovecs;
+    iovecs.reserve(messages.size());
+    
+    for (const auto& msg : messages) {
+        struct iovec iov;
+        // Note: iov_base is const void* in POSIX, needs to be cast to void* for legacy API
+        iov.iov_base = reinterpret_cast<void*>(const_cast<MboMessage*>(&msg));
+        iov.iov_len = sizeof(MboMessage);
+        iovecs.push_back(iov);
+    }
+    
+    // Send all messages in a single writev system call
+    // This is the key optimization: reduces N system calls to 1
+    ssize_t totalBytes = messages.size() * sizeof(MboMessage);
+    ssize_t bytesSent = writev(clientSocket, iovecs.data(), static_cast<int>(iovecs.size()));
+    
+    return bytesSent == totalBytes;
 }
 
 bool TCPSender::sendData(int clientSocket, const void* data, size_t size) {
