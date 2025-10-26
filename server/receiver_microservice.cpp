@@ -229,6 +229,13 @@ public:
                 jsonRecords = actualFileRecords; // Use the actual file count
             }
             
+            // Get the processing time from the backend (tracked by TCPReceiver)
+            // This is the "Processing Time" shown in terminal
+            int processingTimeMs = 0;
+            if (messagesReceived > 0 && throughput > 0) {
+                processingTimeMs = static_cast<int>((messagesReceived / throughput) * 1000);
+            }
+            
             // Reset the receiver after capturing ALL stats
             receiver_.reset();
             receiver_ = std::make_unique<TCPReceiver>();
@@ -250,7 +257,7 @@ public:
                      << "\"status\":\"success\","
                      << "\"message\":\"Processing completed successfully\","
                      << "\"processing_stats\":{"
-                     << "\"processing_time_ms\":753,"  // This should be calculated dynamically
+                     << "\"processing_time_ms\":" << processingTimeMs << ","
                      << "\"messages_received\":" << messagesReceived << ","
                      << "\"orders_processed\":" << ordersProcessed << ","
                      << "\"json_records_generated\":" << jsonRecords << ","

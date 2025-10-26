@@ -137,8 +137,12 @@ void TCPReceiver::stopReceiving() {
     
     // Wait for JSON generation thread to finish processing ring buffer
     if (jsonGenerationThread_.joinable()) {
-        // Give it time to drain the ring buffer
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Wait for ring buffer to drain with timeout
+        int waitCount = 0;
+        while (!jsonRingBuffer_->empty() && waitCount < 100) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            waitCount++;
+        }
         jsonGenerationThread_.join();
     }
     
@@ -148,6 +152,45 @@ void TCPReceiver::stopReceiving() {
     // Force one more flush to ensure all data is written
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     flushJsonBuffer();
+    
+    // NOW print statistics after JSON thread has fully completed
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime_ - startTime_);
+    std::cout << "\n=== TCP Receiver Final Statistics ===" << std::endl;
+    std::cout << "Processing Time: " << duration.count() << " ms" << std::endl;
+    std::cout << "Messages Received: " << receivedMessages_ << " (should match sender's Messages Sent)" << std::endl;
+    std::cout << "Orders Successfully Processed: " << processedOrders_ << std::endl;
+    
+    // Show skipped count if there's a difference
+    if (receivedMessages_ > processedOrders_) {
+        std::cout << "Messages Skipped (due to missing orders/levels): " << (receivedMessages_ - processedOrders_) << std::endl;
+    }
+    
+    if (jsonOutputEnabled_) {
+        std::cout << "JSON Records Generated: " << jsonOutputs_ << std::endl;
+    }
+    if (duration.count() > 0) {
+        double messagesPerSecond = (double)receivedMessages_ * 1000.0 / duration.count();
+        double ordersPerSecond = (double)processedOrders_ * 1000.0 / duration.count();
+        std::cout << "Message Throughput: " << std::fixed << std::setprecision(0) << messagesPerSecond << " messages/sec" << std::endl;
+        std::cout << "Order Processing Rate: " << std::fixed << std::setprecision(0) << ordersPerSecond << " orders/sec" << std::endl;
+    }
+    
+    // Order book final state
+    if (orderBook_) {
+        std::cout << "\nFinal Order Book Summary:" << std::endl;
+        std::cout << "  Active Orders: " << orderBook_->GetOrderCount() << std::endl;
+        std::cout << "  Bid Price Levels: " << orderBook_->GetBidLevelCount() << std::endl;
+        std::cout << "  Ask Price Levels: " << orderBook_->GetAskLevelCount() << std::endl;
+        
+        auto finalBbo = orderBook_->Bbo();
+        auto finalBid = finalBbo.first.price < finalBbo.second.price ? finalBbo.first : finalBbo.second;
+        auto finalAsk = finalBbo.first.price > finalBbo.second.price ? finalBbo.first : finalBbo.second;
+        
+        std::cout << "  Best Bid: " << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
+        std::cout << "  Best Ask: " << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
+        std::cout << "  Bid-Ask Spread: " << (finalAsk.price - finalBid.price) << std::endl;
+    }
+    std::cout << "=====================================" << std::endl;
     
     // Close socket
     if (clientSocket_ != -1) {
@@ -201,7 +244,7 @@ void TCPReceiver::receivingLoop() {
                     databento::MboMsg mbo = convertToDatabentoMbo(*msg);
                     orderBook_->Apply(mbo);
                     processedOrders_++;
-                    receivedMessages_++;
+                    receivedMessages_++;  // Count successfully processed messages
                     
                     // Push to ring buffer for JSON generation (in separate thread)
                     // This prevents blocking TCP receiving on slow JSON generation
@@ -218,11 +261,17 @@ void TCPReceiver::receivingLoop() {
                     
                 } catch (const std::invalid_argument& e) {
                     // Handle missing orders/levels gracefully
+                    // These messages are RECEIVED but cannot be successfully processed
+                    // due to missing orders/levels - normal in market data
                     std::string error_msg = e.what();
                     if (error_msg.find("No order with ID") != std::string::npos ||
                         error_msg.find("Received event for unknown level") != std::string::npos) {
                         static int skippedCount = 0;
-                        if (++skippedCount % 1000 == 0) {
+                        skippedCount++;
+                        // Increment receivedMessages_ because message WAS successfully received over network
+                        receivedMessages_++;
+                        // Log every 1000 skipped orders to avoid spam
+                        if (skippedCount % 1000 == 0) {
                             utils::logInfo("Skipped " + std::to_string(skippedCount) + " orders due to missing references (normal for real market data)");
                         }
                     } else {
@@ -230,6 +279,8 @@ void TCPReceiver::receivingLoop() {
                     }
                 } catch (const std::exception& e) {
                     utils::logError("Error processing order: " + std::string(e.what()));
+                    // Increment receivedMessages_ because message WAS successfully received over network
+                    receivedMessages_++;
                 }
                 
                 // Move remaining data to beginning of buffer
@@ -245,39 +296,10 @@ void TCPReceiver::receivingLoop() {
     }
     
     endTime_ = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime_ - startTime_);
     
-    // Final statistics - consolidated output
-    std::cout << "\n=== TCP Receiver Final Statistics ===" << std::endl;
-    std::cout << "Processing Time: " << duration.count() << " ms" << std::endl;
-    std::cout << "Messages Received: " << receivedMessages_ << std::endl;
-    std::cout << "Orders Processed: " << processedOrders_ << std::endl;
-    if (jsonOutputEnabled_) {
-        std::cout << "JSON Records Generated: " << orderBook_->getJsonOutputs() << std::endl;
-    }
-    if (duration.count() > 0) {
-        double messagesPerSecond = (double)receivedMessages_ * 1000.0 / duration.count();
-        double ordersPerSecond = (double)processedOrders_ * 1000.0 / duration.count();
-        std::cout << "Message Throughput: " << std::fixed << std::setprecision(0) << messagesPerSecond << " messages/sec" << std::endl;
-        std::cout << "Order Processing Rate: " << std::fixed << std::setprecision(0) << ordersPerSecond << " orders/sec" << std::endl;
-    }
-    
-    // Order book final state
-    if (orderBook_) {
-        std::cout << "\nFinal Order Book Summary:" << std::endl;
-        std::cout << "  Active Orders: " << orderBook_->GetOrderCount() << std::endl;
-        std::cout << "  Bid Price Levels: " << orderBook_->GetBidLevelCount() << std::endl;
-        std::cout << "  Ask Price Levels: " << orderBook_->GetAskLevelCount() << std::endl;
-        
-        auto finalBbo = orderBook_->Bbo();
-        auto finalBid = finalBbo.first.price < finalBbo.second.price ? finalBbo.first : finalBbo.second;
-        auto finalAsk = finalBbo.first.price > finalBbo.second.price ? finalBbo.first : finalBbo.second;
-        
-        std::cout << "  Best Bid: " << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
-        std::cout << "  Best Ask: " << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
-        std::cout << "  Bid-Ask Spread: " << (finalAsk.price - finalBid.price) << std::endl;
-    }
-    std::cout << "=====================================" << std::endl;
+    // NOTE: Statistics are NOT printed here anymore
+    // They will be printed in stopReceiving() after JSON thread completes
+    // This ensures accurate jsonOutputs_ counter
     
     // Message reception and order book processing completed
 }
@@ -343,18 +365,21 @@ std::string TCPReceiver::generateJsonOutput(const db::MboMsg& mbo) {
         json << "},";
         
         // Add top levels
+        size_t bidCount = std::min(topLevels_, orderBook_->GetBidLevelCount());
+        size_t askCount = std::min(topLevels_, orderBook_->GetAskLevelCount());
+        
         json << "\"levels\":{";
         json << "\"bids\":[";
-        for (size_t i = 0; i < topLevels_; ++i) {
+        for (size_t i = 0; i < bidCount; ++i) {
             auto bid = orderBook_->GetBidLevel(i);
-            if (bid.price == db::kUndefPrice) break;
+            if (!bid || bid.price == db::kUndefPrice) break;
             if (i > 0) json << ",";
             json << "{\"price\":\"" << std::to_string(bid.price) << "\",\"size\":" << bid.size << ",\"count\":" << bid.count << "}";
         }
         json << "],\"asks\":[";
-        for (size_t i = 0; i < topLevels_; ++i) {
+        for (size_t i = 0; i < askCount; ++i) {
             auto ask = orderBook_->GetAskLevel(i);
-            if (ask.price == db::kUndefPrice) break;
+            if (!ask || ask.price == db::kUndefPrice) break;
             if (i > 0) json << ",";
             json << "{\"price\":\"" << std::to_string(ask.price) << "\",\"size\":" << ask.size << ",\"count\":" << ask.count << "}";
         }

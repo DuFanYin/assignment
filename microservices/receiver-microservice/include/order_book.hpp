@@ -198,6 +198,13 @@ class Book {
     }
   }
   
+  // Clear the order book
+  void Clear() {
+    orders_by_id_.clear();
+    offers_.clear();
+    bids_.clear();
+  }
+  
   // JSON generation methods
   std::string generateJsonOutput(const db::MboMsg& mbo) {
     std::stringstream json;
@@ -322,12 +329,6 @@ class Book {
                                   std::to_string(order_id)};
     }
     return order_it;
-  }
-
-  void Clear() {
-    orders_by_id_.clear();
-    offers_.clear();
-    bids_.clear();
   }
 
   void Add(db::MboMsg mbo) {

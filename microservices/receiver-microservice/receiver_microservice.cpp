@@ -146,6 +146,8 @@ public:
         std::cout << "📥 Received start processing request" << std::endl;
         
         try {
+            std::cout << "🔌 Attempting to connect to sender on port 8080..." << std::endl;
+            
             // Connect to sender (like original receiver_main.cpp)
             if (!receiver_->connect()) {
                 std::cout << "❌ Failed to connect to sender" << std::endl;
@@ -153,17 +155,20 @@ public:
                 return;
             }
             
+            std::cout << "✅ Connected to sender successfully!" << std::endl;
             std::cout << "🌐 Server Host: sender-microservice" << std::endl;
             std::cout << "🔌 Server Port: 8080" << std::endl;
             std::cout << "📈 Symbol: CLX5" << std::endl;
             std::cout << "📊 Top Levels: 10" << std::endl;
             std::cout << "📋 Output Mode: Complete Order Book" << std::endl;
             std::cout << "📁 JSON Output File: data/order_book_output.json" << std::endl;
-            std::cout << "🔄 Buffer: Simple 4KB buffer (proven approach)" << std::endl;
+            std::cout << "🔄 Buffer: 128KB buffer (optimized approach)" << std::endl;
             std::cout << "📝 JSON Batching: 5000 records per batch, flush every 500" << std::endl;
             
             // Start receiving and processing (like original)
+            std::cout << "🚀 Starting receiver processing..." << std::endl;
             receiver_->startReceiving();
+            std::cout << "⏳ Waiting for data stream..." << std::endl;
             
             // Wait for receiving to complete (like original)
             while (receiver_->isConnected()) {
@@ -223,6 +228,16 @@ public:
                 jsonRecords = actualFileRecords; // Use the actual file count
             }
             
+            // Calculate the processing time from the receiver's throughput
+            // This gives the actual processing time shown in terminal
+            int processingTimeMs = 0;
+            if (messagesReceived > 0 && throughput > 0) {
+                // Calculate: messages / (messages/sec) = seconds
+                processingTimeMs = static_cast<int>((messagesReceived / throughput) * 1000);
+            }
+            
+            std::cout << "📊 Using backend tracked processing time: " << processingTimeMs << "ms" << std::endl;
+            
             // Reset the receiver after capturing ALL stats
             receiver_.reset();
             receiver_ = std::make_unique<TCPReceiver>();
@@ -244,7 +259,7 @@ public:
                      << "\"status\":\"success\","
                      << "\"message\":\"Processing completed successfully\","
                      << "\"processing_stats\":{"
-                     << "\"processing_time_ms\":753,"  // This should be calculated dynamically
+                     << "\"processing_time_ms\":" << processingTimeMs << ","
                      << "\"messages_received\":" << messagesReceived << ","
                      << "\"orders_processed\":" << ordersProcessed << ","
                      << "\"json_records_generated\":" << jsonRecords << ","

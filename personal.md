@@ -69,6 +69,10 @@ to fix metrics calculation and display bug
 fro server version, add ring buffuer to decouple json generation and order book process
 huge performace boost
 
+30 min 
+
+fix bugs and apply ring buffer to microservice version
+
 
 
 
@@ -85,32 +89,3 @@ both server and microservice version will send entire json from backend, using a
 also server implementation is extremely simple, for expansion would let python server spin up multiple order book instances and have a sender to send data depending on time frame and other parameters.
 
 for other minor tasks such as test/ci/cd, i have used those in my project before, for the purpose of this assignment I focused on more architecture related parts, with enough time I can definitely do all of them
-
-
-metrics from server version
-
-=== TCP Sender Final Statistics ===
-Streaming Time: 47 ms
-Messages Sent: 38212
-Throughput: 813021 messages/sec
-===================================
-[INFO] Data transmission completed successfully!
-[INFO] Skipped 1000 orders due to missing references (normal for real market data)
-[INFO] Server closed connection
-
-=== TCP Receiver Final Statistics ===
-Processing Time: 67 ms
-Messages Received: 36988
-Orders Processed: 36988
-JSON Records Generated: 0
-Message Throughput: 552060 messages/sec
-Order Processing Rate: 552060 orders/sec
-
-Final Order Book Summary:
-  Active Orders: 147
-  Bid Price Levels: 61
-  Ask Price Levels: 52
-  Best Bid: 64 @ 3 (1 orders)
-  Best Ask: 65 @ 1 (1 orders)
-  Bid-Ask Spread: 620000000
-=====================================

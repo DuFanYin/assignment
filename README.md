@@ -6,6 +6,29 @@ A high-performance market data processing system that streams Market-By-Order (M
 
 This project provides three different implementations to suit various use cases:
 
+### performace statistic 
+
+| Metric                                | Server Version                | Microservices Version         |
+|----------------------------------------|-------------------------------|------------------------------|
+| **Sender: Streaming Time**             | 29 ms                         | 51 ms                        |
+| **Sender: Messages Sent**              | 38,212                        | 38,212                       |
+| **Sender: Throughput**                 | 1,317,655 messages/sec        | 749,255 messages/sec         |
+| **Sender: Skipped Orders**             | 1,000                         | 1,000                        |
+| **Receiver: Processing Time**          | 47 ms                         | 74 ms                        |
+| **Receiver: Messages Received**        | 38,212                        | 38,212                       |
+| **Receiver: Orders Processed**         | 36,988                        | 36,988                       |
+| **Receiver: Messages Skipped**         | 1,224                         | 1,224                        |
+| **Receiver: JSON Records Generated**   | 36,988                        | 36,988                       |
+| **Receiver: Message Throughput**       | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Order Processing Rate**    | 786,979 orders/sec            | 499,838 orders/sec           |
+| **Receiver: Active Orders**            | 147                           | 147                          |
+| **Receiver: Bid Price Levels**         | 61                            | 61                           |
+| **Receiver: Ask Price Levels**         | 52                            | 52                           |
+| **Receiver: Best Bid**                 | 64 @ 3 (1 orders)             | 64 @ 3 (1 orders)            |
+| **Receiver: Best Ask**                 | 65 @ 1 (1 orders)             | 65 @ 1 (1 orders)            |
+| **Receiver: Bid-Ask Spread**           | 620,000,000                   | 620,000,000                  |
+
+
 ### 1. **Standalone Version** (`/src/`)
 Simple, single-machine implementation for local development and testing.
 
@@ -120,50 +143,6 @@ All three versions produce identical output and metrics.
     "bid_ask_spread": 620000000
   }
 }
-```
-
-### Performance Metrics
-
-All versions report the same metrics:
-
-| Metric | Description | Typical Value |
-|--------|-------------|---------------|
-| **Processing Time** | Total time from start to finish | ~700-800 ms |
-| **Messages Received** | Total MBO messages received | ~36,988 |
-| **Orders Processed** | Orders successfully applied to book | ~36,988 |
-| **JSON Records** | Order book snapshots written | ~36,988 |
-| **Throughput** | Messages processed per second | ~51,000 msg/sec |
-| **Order Processing Rate** | Orders processed per second | ~51,000 orders/sec |
-| **File Size** | Size of JSON output file | ~42 MB |
-| **Active Orders** | Orders currently in the order book | ~147 |
-| **Bid Price Levels** | Number of bid price levels | ~61 |
-| **Ask Price Levels** | Number of ask price levels | ~52 |
-| **Bid-Ask Spread** | Difference between best bid and ask | Variable |
-
-### Example Console Output
-
-```
-=== TCP Sender Final Statistics ===
-Streaming Time: 507 ms
-Messages Sent: 38212
-Throughput: 75369 messages/sec
-===================================
-
-=== TCP Receiver Final Statistics ===
-Processing Time: 721 ms
-Messages Received: 36988
-Orders Processed: 36988
-JSON Records Generated: 36988
-Message Throughput: 51301 messages/sec
-Order Processing Rate: 51301 orders/sec
-
-Final Order Book Summary:
-  Active Orders: 147
-  Bid Price Levels: 61
-  Ask Price Levels: 52
-  Best Bid: 64.78 @ 3 (1 orders)
-  Best Ask: 65.40 @ 1 (1 orders)
-  Bid-Ask Spread: 620000000
 ```
 
 ---
