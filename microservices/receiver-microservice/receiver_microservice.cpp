@@ -12,7 +12,6 @@
 #include <string>
 #include <sstream>
 #include "../include/tcp_receiver.hpp"
-#include "../include/tcp_sender.hpp"
 #include "../include/utils.hpp"
 
 class ReceiverMicroservice {

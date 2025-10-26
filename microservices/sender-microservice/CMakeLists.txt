@@ -28,8 +28,6 @@ include_directories(databento-cpp/build/_deps/json-src/include)
 set(COMMON_SOURCES
     src/utils.cpp
     src/tcp_sender.cpp
-    src/tcp_receiver.cpp
-    src/streamer.cpp
 )
 
 # Sender Microservice executable
