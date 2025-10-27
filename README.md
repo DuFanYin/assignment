@@ -12,11 +12,11 @@ This project provides three different implementations to suit various use cases:
 |----------------------------------------|-------------------------------|------------------------------|
 | **Sender: Streaming Time**             | 29 ms                         | 51 ms                        |
 | **Sender: Messages Sent**              | 38,212                        | 38,212                       |
-| **Sender: Throughput**                 | 1,317,655 messages/sec        | 749,255 messages/sec         |
+| **Sender: TCP Throughput**             | 1,317,655 messages/sec        | 749,255 messages/sec         |
 | **Receiver: Processing Time**          | 47 ms                         | 74 ms                        |
-| **Receiver: Message Throughput**       | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Total Throughput**         | 813,021 messages/sec          | 516,378 messages/sec         |
 | **Receiver: Order Processing Rate**    | 786,979 orders/sec            | 499,838 orders/sec           |
-| **Average time per order**             | 1.2 ms                        | 2.1 ms                       |
+| **Average time per order**             | 470 ns                        | 600 ns                       |
 
 
 _Time per order is calculated as: (Sender Time - Receiver Time) divided by the number of orders_
