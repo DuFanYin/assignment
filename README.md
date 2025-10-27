@@ -22,17 +22,19 @@ This project provides three different implementations to suit various use cases:
 _Time per order is calculated as: (Sender Time - Receiver Time) divided by the number of orders_
 
 
-| **Sender: Skipped Orders**             | 1,000                         | 1,000                        |
-| **Receiver: Messages Received**        | 38,212                        | 38,212                       |
-| **Receiver: Orders Processed**         | 36,988                        | 36,988                       |
-| **Receiver: Messages Skipped**         | 1,224                         | 1,224                        |
-| **Receiver: JSON Records Generated**   | 36,988                        | 36,988                       |
-| **Receiver: Active Orders**            | 147                           | 147                          |
-| **Receiver: Bid Price Levels**         | 61                            | 61                           |
-| **Receiver: Ask Price Levels**         | 52                            | 52                           |
-| **Receiver: Best Bid**                 | 64 @ 3 (1 orders)             | 64 @ 3 (1 orders)            |
-| **Receiver: Best Ask**                 | 65 @ 1 (1 orders)             | 65 @ 1 (1 orders)            |
-| **Receiver: Bid-Ask Spread**           | 620,000,000                   | 620,000,000                  |
+| Metric                                 | Server Version                | Microservices Version         |
+|-----------------------------------------|-------------------------------|------------------------------|
+| **Sender: Skipped Orders**              | 1,000                         | 1,000                        |
+| **Receiver: Messages Received**         | 38,212                        | 38,212                       |
+| **Receiver: Orders Processed**          | 36,988                        | 36,988                       |
+| **Receiver: Messages Skipped**          | 1,224                         | 1,224                        |
+| **Receiver: JSON Records Generated**    | 36,988                        | 36,988                       |
+| **Receiver: Active Orders**             | 147                           | 147                          |
+| **Receiver: Bid Price Levels**          | 61                            | 61                           |
+| **Receiver: Ask Price Levels**          | 52                            | 52                           |
+| **Receiver: Best Bid**                  | 64 @ 3 (1 orders)             | 64 @ 3 (1 orders)            |
+| **Receiver: Best Ask**                  | 65 @ 1 (1 orders)             | 65 @ 1 (1 orders)            |
+| **Receiver: Bid-Ask Spread**            | 620,000,000                   | 620,000,000                  |
 
 
 ### 1. **Standalone Version** (`/src/`)
