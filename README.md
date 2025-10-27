@@ -13,14 +13,20 @@ This project provides three different implementations to suit various use cases:
 | **Sender: Streaming Time**             | 29 ms                         | 51 ms                        |
 | **Sender: Messages Sent**              | 38,212                        | 38,212                       |
 | **Sender: Throughput**                 | 1,317,655 messages/sec        | 749,255 messages/sec         |
-| **Sender: Skipped Orders**             | 1,000                         | 1,000                        |
 | **Receiver: Processing Time**          | 47 ms                         | 74 ms                        |
+| **Receiver: Message Throughput**       | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Order Processing Rate**    | 786,979 orders/sec            | 499,838 orders/sec           |
+| **Average time per order**             | 1.2 ms                        | 2.1 ms                       |
+
+
+_Time per order is calculated as: (Sender Time - Receiver Time) divided by the number of orders_
+
+
+| **Sender: Skipped Orders**             | 1,000                         | 1,000                        |
 | **Receiver: Messages Received**        | 38,212                        | 38,212                       |
 | **Receiver: Orders Processed**         | 36,988                        | 36,988                       |
 | **Receiver: Messages Skipped**         | 1,224                         | 1,224                        |
 | **Receiver: JSON Records Generated**   | 36,988                        | 36,988                       |
-| **Receiver: Message Throughput**       | 813,021 messages/sec          | 516,378 messages/sec         |
-| **Receiver: Order Processing Rate**    | 786,979 orders/sec            | 499,838 orders/sec           |
 | **Receiver: Active Orders**            | 147                           | 147                          |
 | **Receiver: Bid Price Levels**         | 61                            | 61                           |
 | **Receiver: Ask Price Levels**         | 52                            | 52                           |
