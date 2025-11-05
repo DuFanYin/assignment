@@ -12,6 +12,7 @@
 #include <netinet/tcp.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <databento/record.hpp>
 #include <databento/enums.hpp>
 
@@ -24,6 +25,7 @@ public:
     void setDelayMs(int delayMs) { delayMs_ = delayMs; }
     void setZeroCopyMode(bool enabled) { zeroCopyMode_ = enabled; }
     void setPort(int port) { port_ = port; }
+    void setBatchSize(size_t batchSize) { batchSize_ = batchSize; }
 
     // Data loading and streaming
     bool loadFromFile(const std::string& filePath);
@@ -40,6 +42,7 @@ private:
     int port_;
     int delayMs_;
     bool zeroCopyMode_;
+    size_t batchSize_;
     
     // Network
     int serverSocket_;
@@ -83,6 +86,7 @@ private:
     void streamingLoop();
     bool sendMboMessage(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
     bool sendMboMessageFast(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
+    bool sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages);
     bool sendData(int clientSocket, const void* data, size_t size);
     bool sendFileZeroCopy(int clientSocket);
     void cleanup();

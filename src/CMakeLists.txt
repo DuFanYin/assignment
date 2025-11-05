@@ -27,6 +27,7 @@ include_directories(../databento-cpp/build/_deps/json-src/include)
 set(COMMON_SOURCES
     src/streamer.cpp
     src/utils.cpp
+    src/config.cpp
 )
 
 # TCP sender executable
@@ -67,5 +68,6 @@ target_link_libraries(TCP_Receiver
 )
 
 # Compiler flags
-target_compile_options(TCP_Sender PRIVATE -Wall -Wextra -O2)
-target_compile_options(TCP_Receiver PRIVATE -Wall -Wextra -O2 -march=native)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+target_compile_options(TCP_Sender PRIVATE -Wall -Wextra -O3 -DNDEBUG -march=native)
+target_compile_options(TCP_Receiver PRIVATE -Wall -Wextra -O3 -DNDEBUG -march=native)

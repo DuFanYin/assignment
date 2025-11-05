@@ -8,33 +8,31 @@ This project provides three different implementations to suit various use cases:
 
 ### performace statistic 
 
-| Metric                                | Server Version                | Microservices Version         |
-|----------------------------------------|-------------------------------|------------------------------|
-| **Sender: Streaming Time**             | 29 ms                         | 51 ms                        |
-| **Sender: Messages Sent**              | 38,212                        | 38,212                       |
-| **Sender: TCP Throughput**             | 1,317,655 messages/sec        | 749,255 messages/sec         |
-| **Receiver: Processing Time**          | 47 ms                         | 74 ms                        |
-| **Receiver: Total Throughput**         | 813,021 messages/sec          | 516,378 messages/sec         |
-| **Receiver: Order Processing Rate**    | 786,979 orders/sec            | 499,838 orders/sec           |
-| **Average time per order**             | 470 ns                        | 600 ns                       |
+src verion is most optimised
+
+| Metric                                | src          | Server Version                | Microservices Version         |
+|----------------------------------------|---------------------|-------------------------------|------------------------------|
+| **Sender: Streaming Time**             | 19 ms               | 29 ms                         | 51 ms                        |
+| **Sender: Messages Sent**              | 38,212              | 38,212                        | 38,212                       |
+| **Sender: TCP Throughput**             | 2,011,158 msg/sec   | 1,317,655 messages/sec        | 749,255 messages/sec         |
+| **Receiver: Processing Time**          | 35 ms               | 47 ms                         | 74 ms                        |
+| **Receiver: Total Throughput**         | 1,091,771 msg/sec   | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Order Processing Rate**    | 1,894,174/sec       | 786,979 orders/sec            | 499,838 orders/sec           |
+| **Average time per order**             | 528 ns              | 470 ns                        | 600 ns                       |
 
 
-_Time per order is calculated as: (Sender Time - Receiver Time) divided by the number of orders_
-
-
-| Metric                                 | Server Version                | Microservices Version         |
-|-----------------------------------------|-------------------------------|------------------------------|
-| **Sender: Skipped Orders**              | 1,000                         | 1,000                        |
-| **Receiver: Messages Received**         | 38,212                        | 38,212                       |
-| **Receiver: Orders Processed**          | 36,988                        | 36,988                       |
-| **Receiver: Messages Skipped**          | 1,224                         | 1,224                        |
-| **Receiver: JSON Records Generated**    | 36,988                        | 36,988                       |
-| **Receiver: Active Orders**             | 147                           | 147                          |
-| **Receiver: Bid Price Levels**          | 61                            | 61                           |
-| **Receiver: Ask Price Levels**          | 52                            | 52                           |
-| **Receiver: Best Bid**                  | 64 @ 3 (1 orders)             | 64 @ 3 (1 orders)            |
-| **Receiver: Best Ask**                  | 65 @ 1 (1 orders)             | 65 @ 1 (1 orders)            |
-| **Receiver: Bid-Ask Spread**            | 620,000,000                   | 620,000,000                  |
+| Metric                                 | New Column          | Server Version                | Microservices Version         |
+|-----------------------------------------|---------------------|-------------------------------|------------------------------|
+| **Receiver: Messages Received**         | 38,212              | 38,212                        | 38,212                       |
+| **Receiver: Orders Processed**          | 36,988              | 36,988                        | 36,988                       |
+| **Receiver: Messages Skipped**          | 1,224               | 1,224                         | 1,224                        |
+| **Receiver: JSON Records Generated**    | 36,988              | 36,988                        | 36,988                       |
+| **Receiver: Active Orders**             | 147                 | 147                           | 147                          |
+| **Receiver: Bid Price Levels**          | 61                  | 61                            | 61                           |
+| **Receiver: Ask Price Levels**          | 52                  | 52                            | 52                           |
+| **Receiver: Best Bid**                  | 64 @ 3 (1 orders)   | 64 @ 3 (1 orders)             | 64 @ 3 (1 orders)            |
+| **Receiver: Best Ask**                  | 65 @ 1 (1 orders)   | 65 @ 1 (1 orders)             | 65 @ 1 (1 orders)            |
+| **Receiver: Bid-Ask Spread**            | 620,000,000         | 620,000,000                   | 620,000,000                  |
 
 
 ### 1. **Standalone Version** (`/src/`)
