@@ -122,37 +122,36 @@ void TCPReceiver::startReceiving() {
     orderBook_->enableJsonOutput(false);
     
     receiving_ = true;
-    receivingThread_ = std::thread(&TCPReceiver::receivingLoop, this);
+    receivingThread_ = std::jthread([this](std::stop_token st){ this->receivingLoop(st); });
     
     if (jsonOutputEnabled_) {
-        jsonGenerationThread_ = std::thread(&TCPReceiver::jsonGenerationLoop, this);
+        jsonGenerationThread_ = std::jthread([this](std::stop_token st){ this->jsonGenerationLoop(st); });
     }
 }
 
 void TCPReceiver::stopReceiving() {
     // Set receiving flag to false
     receiving_ = false;
-    
-    // Wait for receiving thread to finish
+    // Request stops to unblock any waits
     if (receivingThread_.joinable()) {
+        // Shutdown socket to unblock read immediately
+        if (clientSocket_ != -1) {
+            shutdown(clientSocket_, SHUT_RD);
+        }
+        receivingThread_.request_stop();
         receivingThread_.join();
     }
-    
-    // Wait for JSON generation thread to finish processing ring buffer
     if (jsonOutputEnabled_ && jsonRingBuffer_ && jsonGenerationThread_.joinable()) {
-        int waitCount = 0;
-        while (!jsonRingBuffer_->empty() && waitCount < 100) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            waitCount++;
-        }
+        jsonGenerationThread_.request_stop();
+        // Wake any waiting consumer
+        jsonRingBuffer_->notify_all();
         jsonGenerationThread_.join();
     }
     
     // CRITICAL: Always flush remaining JSON data
     flushJsonBuffer();
     
-    // Force one more flush to ensure all data is written
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // One final flush to ensure all data is written
     flushJsonBuffer();
     
     // Stats printing moved to receiver_main.cpp
@@ -167,14 +166,14 @@ void TCPReceiver::stopReceiving() {
     connected_ = false;
 }
 
-void TCPReceiver::receivingLoop() {
+void TCPReceiver::receivingLoop(std::stop_token stopToken) {
     // Use larger buffer and minimize memmove by batching message processing
     char buffer[128 * 1024];
     size_t bufferPos = 0;
     bool timingStarted = false;
     
     try {
-        while (receiving_) {
+        while (!stopToken.stop_requested()) {
             // Read raw bytes from network into buffer
             ssize_t bytesReceived = read(clientSocket_, buffer + bufferPos, sizeof(buffer) - bufferPos);
             
@@ -182,8 +181,7 @@ void TCPReceiver::receivingLoop() {
                 if (bytesReceived != 0) {
                     utils::logError("Error receiving data");
                 }
-                // Set flags to false so main thread knows we're done
-                receiving_ = false;
+                // Natural end or error: signal disconnect and break
                 connected_ = false;
                 break;
             }
@@ -291,10 +289,10 @@ databento::MboMsg TCPReceiver::convertToDatabentoMbo(const MboMessage& msg) {
     return mbo;
 }
 
-void TCPReceiver::jsonGenerationLoop() {
+void TCPReceiver::jsonGenerationLoop(std::stop_token stopToken) {
     MboMessageWrapper wrapper;
     size_t jsonCount = 0;
-    while (receiving_ || !jsonRingBuffer_->empty()) {
+    while (!stopToken.stop_requested() || !jsonRingBuffer_->empty()) {
         if (jsonRingBuffer_->try_pop(wrapper)) {
             try {
                 std::string json = generateJsonOutput(wrapper.mbo);
@@ -305,7 +303,13 @@ void TCPReceiver::jsonGenerationLoop() {
                 utils::logError("Error generating JSON: " + std::string(e.what()));
             }
         } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            // Block until new data arrives or stop is requested
+            if (stopToken.stop_requested()) {
+                // Wake and retry drain condition
+                jsonRingBuffer_->wait_for_data();
+            } else {
+                jsonRingBuffer_->wait_for_data();
+            }
         }
     }
 }

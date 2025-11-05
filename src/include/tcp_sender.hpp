@@ -57,7 +57,7 @@ private:
     // State
     std::atomic<bool> streaming_;
     std::atomic<size_t> sentMessages_;
-    std::thread streamingThread_;
+    std::jthread streamingThread_;
     
     // Timing
     std::chrono::high_resolution_clock::time_point startTime_;
@@ -83,7 +83,7 @@ private:
     
     // Methods
     bool setupServer();
-    void streamingLoop();
+    void streamingLoop(std::stop_token stopToken);
     bool sendMboMessage(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
     bool sendMboMessageFast(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
     bool sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages);

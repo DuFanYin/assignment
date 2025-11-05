@@ -94,8 +94,8 @@ private:
     std::atomic<size_t> receivedMessages_;
     std::atomic<size_t> processedOrders_;
     std::atomic<size_t> jsonOutputs_;
-    std::thread receivingThread_;
-    std::thread jsonGenerationThread_;  // Separate thread for JSON generation
+    std::jthread receivingThread_;
+    std::jthread jsonGenerationThread_;  // Separate thread for JSON generation
     
     // Ring buffer for decoupling order book processing from JSON generation
     std::unique_ptr<RingBuffer<MboMessageWrapper>> jsonRingBuffer_;
@@ -108,8 +108,8 @@ private:
     
     // Methods
     bool setupConnection();
-    void receivingLoop();
-    void jsonGenerationLoop();  // Runs in separate thread to generate JSON
+    void receivingLoop(std::stop_token stopToken);
+    void jsonGenerationLoop(std::stop_token stopToken);  // Runs in separate thread to generate JSON
     std::string generateJsonOutput(const db::MboMsg& mbo);  // Generate JSON from order book
     bool receiveData(void* data, size_t size);
     databento::MboMsg convertToDatabentoMbo(const MboMessage& msg);

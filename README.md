@@ -12,13 +12,13 @@ src verion is most optimised
 
 | Metric                                | src          | Server Version                | Microservices Version         |
 |----------------------------------------|---------------------|-------------------------------|------------------------------|
-| **Sender: Streaming Time**             | 19 ms               | 29 ms                         | 51 ms                        |
+| **Sender: Streaming Time**             | 9 ms                | 29 ms                         | 51 ms                        |
 | **Sender: Messages Sent**              | 38,212              | 38,212                        | 38,212                       |
-| **Sender: TCP Throughput**             | 2,011,158 msg/sec   | 1,317,655 messages/sec        | 749,255 messages/sec         |
-| **Receiver: Processing Time**          | 35 ms               | 47 ms                         | 74 ms                        |
-| **Receiver: Total Throughput**         | 1,091,771 msg/sec   | 813,021 messages/sec          | 516,378 messages/sec         |
-| **Receiver: Order Processing Rate**    | 1,894,174/sec       | 786,979 orders/sec            | 499,838 orders/sec           |
-| **Average time per order**             | 528 ns              | 470 ns                        | 600 ns                       |
+| **Sender: TCP Throughput**             | 4,245,778 msg/sec   | 1,317,655 messages/sec        | 749,255 messages/sec         |
+| **Receiver: Processing Time**          | 19 ms               | 47 ms                         | 74 ms                        |
+| **Receiver: Total Throughput**         | 2,011,158 msg/sec   | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Order Processing Rate**    | 9,755,318/sec       | 786,979 orders/sec            | 499,838 orders/sec           |
+| **Average time per order**             | 103 ns              | 470 ns                        | 600 ns                       |
 
 
 | Metric                                 | New Column          | Server Version                | Microservices Version         |

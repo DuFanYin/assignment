@@ -111,7 +111,7 @@ void TCPSender::startStreaming() {
     }
     
     streaming_ = true;
-    streamingThread_ = std::thread(&TCPSender::streamingLoop, this);
+    streamingThread_ = std::jthread([this](std::stop_token st){ this->streamingLoop(st); });
 }
 
 void TCPSender::stopStreaming() {
@@ -120,8 +120,15 @@ void TCPSender::stopStreaming() {
     }
     
     streaming_ = false;
-    
     if (streamingThread_.joinable()) {
+        // Unblock accept/recv by shutting down sockets
+        if (clientSocket_ != -1) {
+            shutdown(clientSocket_, SHUT_RDWR);
+        }
+        if (serverSocket_ != -1) {
+            shutdown(serverSocket_, SHUT_RDWR);
+        }
+        streamingThread_.request_stop();
         streamingThread_.join();
     }
     
@@ -136,7 +143,7 @@ void TCPSender::stopStreaming() {
     }
 }
 
-void TCPSender::streamingLoop() {
+void TCPSender::streamingLoop(std::stop_token stopToken) {
     // Wait for client connection
     struct sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
@@ -205,6 +212,9 @@ void TCPSender::streamingLoop() {
     
     try {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {
+            if (stopToken.stop_requested()) {
+                break;
+            }
             const auto& mbo = allMessages[i];
             
             // Prepare message with ORIGINAL timestamp to preserve file order

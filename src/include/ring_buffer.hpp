@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <concepts>
 
 /**
  * Lock-free SPSC (Single Producer Single Consumer) ring buffer
@@ -48,6 +49,8 @@ public:
         
         item = buffer_[current_read & mask_];
         read_pos_.store(current_read + 1, std::memory_order_release);
+        // Wake potential producers waiting for space
+        read_pos_.notify_one();
         return true;
     }
     
@@ -64,6 +67,44 @@ public:
     bool empty() const {
         return read_pos_.load(std::memory_order_acquire) == 
                write_pos_.load(std::memory_order_acquire);
+    }
+
+    // C++20 blocking helpers
+    void wait_for_data() const {
+        // Wait until write_pos_ changes (i.e., new data is written)
+        size_t observed = write_pos_.load(std::memory_order_acquire);
+        write_pos_.wait(observed, std::memory_order_acquire);
+    }
+
+    void wait_for_space() const {
+        // Wait until read_pos_ changes (i.e., consumer freed space)
+        size_t observed = read_pos_.load(std::memory_order_acquire);
+        read_pos_.wait(observed, std::memory_order_acquire);
+    }
+
+    void notify_all() {
+        write_pos_.notify_all();
+        read_pos_.notify_all();
+    }
+
+    // Blocking variants
+    void push(const T& item) {
+        while (true) {
+            if (try_push(item)) {
+                return;
+            }
+            wait_for_space();
+        }
+    }
+
+    bool pop(T& item) {
+        while (true) {
+            if (try_pop(item)) {
+                return true;
+            }
+            // If empty, wait for writers
+            wait_for_data();
+        }
     }
     
 private:
