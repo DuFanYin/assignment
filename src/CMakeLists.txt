@@ -25,7 +25,6 @@ include_directories(../databento-cpp/build/_deps/json-src/include)
 
 # Common source files
 set(COMMON_SOURCES
-    src/streamer.cpp
     src/utils.cpp
     src/config.cpp
 )

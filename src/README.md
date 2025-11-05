@@ -7,7 +7,6 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
 - **TCPReceiver (`src/tcp_receiver.cpp`, `include/tcp_receiver.hpp`)**: Accepts the stream, reconstructs `MboMsg`, applies it to the in-memory order book, decouples JSON generation via a blocking SPSC ring buffer, and tracks performance metrics. Uses C++20 `std::jthread` and `std::stop_token` for structured concurrency. JSON generation is always enabled and persisted to a file kept open for append.
 - **Order Book (`include/order_book.hpp`)**: Reference book with per-level queues. Supports `Add/Cancel/Modify/Clear`, BBO lookup, snapshots, and optional JSON snapshot generation hooks.
 - **RingBuffer (`include/ring_buffer.hpp`)**: Lock-free single-producer single-consumer queue with C++20 `atomic::wait/notify`; provides blocking `push/pop` to decouple the hot path from JSON generation without drops.
-- **Streamer (offline helper) (`src/streamer.cpp`, `include/streamer.hpp`)**: Convenience loader/iterator for DBN records (not used in TCP pipeline runtime).
 - **Config (`include/config.hpp`, `src/config.cpp`, `config.ini`)**: Simple key-value configuration for ports, batching, symbols, and feature toggles.
 
 ## Architecture
