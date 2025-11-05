@@ -8,17 +8,18 @@ This project provides three different implementations to suit various use cases:
 
 ### performace statistic 
 
-src verion is most optimised
+[src version](src/README.md) is most optimised 
 
-| Metric                                | src          | Server Version                | Microservices Version         |
-|----------------------------------------|---------------------|-------------------------------|------------------------------|
-| **Sender: Streaming Time**             | 9 ms                | 29 ms                         | 51 ms                        |
-| **Sender: Messages Sent**              | 38,212              | 38,212                        | 38,212                       |
-| **Sender: TCP Throughput**             | 4,245,778 msg/sec   | 1,317,655 messages/sec        | 749,255 messages/sec         |
-| **Receiver: Processing Time**          | 19 ms               | 47 ms                         | 74 ms                        |
-| **Receiver: Total Throughput**         | 2,011,158 msg/sec   | 813,021 messages/sec          | 516,378 messages/sec         |
-| **Receiver: Order Processing Rate**    | 9,755,318/sec       | 786,979 orders/sec            | 499,838 orders/sec           |
-| **Average time per order**             | 103 ns              | 470 ns                        | 600 ns                       |
+| Metric                                | src                  | Server Version                | Microservices Version         |
+|----------------------------------------|----------------------|-------------------------------|------------------------------|
+| **Sender: Streaming Time**             | 3 ms                 | 29 ms                         | 51 ms                        |
+| **Sender: Messages Sent**              | 38,212               | 38,212                        | 38,212                       |
+| **Sender: TCP Throughput**             | 12,737,333 msg/sec   | 1,317,655 messages/sec        | 749,255 messages/sec         |
+| **Receiver: Processing Time**          | -                    | 47 ms                         | 74 ms                        |
+| **Receiver: Total Throughput**         | 2,011,158 msg/sec    | 813,021 messages/sec          | 516,378 messages/sec         |
+| **Receiver: Order Processing Rate**    | 9,426,156/sec        | 786,979 orders/sec            | 499,838 orders/sec           |
+| **Average time per order**             | 106 ns               | 470 ns                        | 600 ns                       |
+| **P99 Order Processing Time**          | 250 ns               | -                             | -                            |
 
 
 | Metric                                 | New Column          | Server Version                | Microservices Version         |

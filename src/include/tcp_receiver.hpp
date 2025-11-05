@@ -20,6 +20,7 @@
 #include "ring_buffer.hpp"
 #include <databento/datetime.hpp>
 #include <sstream>
+#include <fstream>
 
 namespace db = databento;
 
@@ -46,7 +47,6 @@ public:
     void setSymbol(const std::string& symbol) { symbol_ = symbol; }
     void setTopLevels(size_t levels) { topLevels_ = levels; }
     void setOutputFullBook(bool output) { outputFullBook_ = output; }
-    void enableJsonOutput(bool enable) { jsonOutputEnabled_ = enable; }
     void setJsonOutputFile(const std::string& filename) { jsonOutputFile_ = filename; }
     
     // JSON batching configuration
@@ -75,7 +75,7 @@ private:
     std::string symbol_;
     size_t topLevels_;
     bool outputFullBook_;
-    bool jsonOutputEnabled_;
+    // JSON output always enabled
     std::string jsonOutputFile_;
     
     // JSON batching
@@ -83,6 +83,7 @@ private:
     size_t jsonFlushInterval_;
     std::vector<std::string> jsonBuffer_;
     std::mutex jsonBufferMutex_;
+    std::ofstream jsonFile_;
     
     // Network
     int clientSocket_;

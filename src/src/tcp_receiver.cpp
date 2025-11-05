@@ -12,7 +12,7 @@
 
 TCPReceiver::TCPReceiver() 
     : host_("127.0.0.1"), port_(8080), orderBook_(nullptr), symbol_(""), 
-      topLevels_(10), outputFullBook_(true), jsonOutputEnabled_(false),
+      topLevels_(10), outputFullBook_(true),
       jsonBatchSize_(1000), jsonFlushInterval_(100), // Batch 1000 JSONs, flush every 100
       clientSocket_(-1), connected_(false), receiving_(false), 
       receivedMessages_(0), processedOrders_(0), jsonOutputs_(0),
@@ -121,12 +121,17 @@ void TCPReceiver::startReceiving() {
     // Configure order book - JSON generation will happen in separate thread
     orderBook_->enableJsonOutput(false);
     
+    // Open JSON file once (append mode)
+    if (!jsonOutputFile_.empty()) {
+        jsonFile_.open(jsonOutputFile_, std::ios::app);
+        if (!jsonFile_.is_open()) {
+            utils::logWarning("Failed to open JSON output file; JSON will not be persisted");
+        }
+    }
+
     receiving_ = true;
     receivingThread_ = std::jthread([this](std::stop_token st){ this->receivingLoop(st); });
-    
-    if (jsonOutputEnabled_) {
-        jsonGenerationThread_ = std::jthread([this](std::stop_token st){ this->jsonGenerationLoop(st); });
-    }
+    jsonGenerationThread_ = std::jthread([this](std::stop_token st){ this->jsonGenerationLoop(st); });
 }
 
 void TCPReceiver::stopReceiving() {
@@ -141,7 +146,7 @@ void TCPReceiver::stopReceiving() {
         receivingThread_.request_stop();
         receivingThread_.join();
     }
-    if (jsonOutputEnabled_ && jsonRingBuffer_ && jsonGenerationThread_.joinable()) {
+    if (jsonRingBuffer_ && jsonGenerationThread_.joinable()) {
         jsonGenerationThread_.request_stop();
         // Wake any waiting consumer
         jsonRingBuffer_->notify_all();
@@ -151,8 +156,12 @@ void TCPReceiver::stopReceiving() {
     // CRITICAL: Always flush remaining JSON data
     flushJsonBuffer();
     
-    // One final flush to ensure all data is written
+    // One final flush to ensure all data is written and close file
     flushJsonBuffer();
+    if (jsonFile_.is_open()) {
+        jsonFile_.flush();
+        jsonFile_.close();
+    }
     
     // Stats printing moved to receiver_main.cpp
     
@@ -167,15 +176,36 @@ void TCPReceiver::stopReceiving() {
 }
 
 void TCPReceiver::receivingLoop(std::stop_token stopToken) {
-    // Use larger buffer and minimize memmove by batching message processing
-    char buffer[128 * 1024];
-    size_t bufferPos = 0;
+    // Circular byte buffer to avoid memmove
+    static constexpr size_t kBufSize = 128 * 1024;
+    std::array<char, kBufSize> buffer{};
+    size_t head = 0; // read position
+    size_t tail = 0; // write position
+    auto buf_size = [&]() {
+        if (tail >= head) return tail - head;
+        return kBufSize - (head - tail);
+    };
+    auto buf_free = [&]() {
+        return kBufSize - buf_size() - 1; // leave 1 byte to distinguish full
+    };
     bool timingStarted = false;
     
     try {
         while (!stopToken.stop_requested()) {
-            // Read raw bytes from network into buffer
-            ssize_t bytesReceived = read(clientSocket_, buffer + bufferPos, sizeof(buffer) - bufferPos);
+            // Read raw bytes from network into circular buffer
+            size_t free_bytes = buf_free();
+            if (free_bytes == 0) {
+                // Should not happen often; yield briefly
+                std::this_thread::yield();
+                continue;
+            }
+            // Determine contiguous space at tail
+            size_t contiguous = (tail >= head) ? (kBufSize - tail) : (head - tail - 1);
+            if (contiguous == 0) {
+                tail = (tail + 0) % kBufSize;
+                continue;
+            }
+            ssize_t bytesReceived = read(clientSocket_, buffer.data() + tail, contiguous);
             
             if (bytesReceived <= 0) {
                 if (bytesReceived != 0) {
@@ -186,12 +216,20 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                 break;
             }
             
-            bufferPos += bytesReceived;
+            tail = (tail + static_cast<size_t>(bytesReceived)) % kBufSize;
 
             // Process as many complete messages as possible from buffer
-            size_t processedBytes = 0;
-            while (bufferPos - processedBytes >= sizeof(MboMessage)) {
-                const MboMessage* msg = reinterpret_cast<const MboMessage*>(buffer + processedBytes);
+            while (buf_size() >= sizeof(MboMessage)) {
+                // If message wraps, copy to a local aligned storage
+                MboMessage localMsg;
+                if (head + sizeof(MboMessage) <= kBufSize) {
+                    const MboMessage* msg = reinterpret_cast<const MboMessage*>(buffer.data() + head);
+                    std::memcpy(&localMsg, msg, sizeof(MboMessage));
+                } else {
+                    size_t first_part = kBufSize - head;
+                    std::memcpy(reinterpret_cast<char*>(&localMsg), buffer.data() + head, first_part);
+                    std::memcpy(reinterpret_cast<char*>(&localMsg) + first_part, buffer.data(), sizeof(MboMessage) - first_part);
+                }
 
                 // Start timing on first message processed
                 if (!timingStarted) {
@@ -204,7 +242,7 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
 
                 // Process message immediately
                 try {
-                    databento::MboMsg mbo = convertToDatabentoMbo(*msg);
+                    databento::MboMsg mbo = convertToDatabentoMbo(localMsg);
                     auto applyStart = std::chrono::high_resolution_clock::now();
                     {
                         std::unique_lock<std::shared_mutex> lock(orderBookMutex_);
@@ -214,12 +252,11 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                     orderProcessTimesNs_.push_back((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(applyEnd - applyStart).count());
                     processedOrders_++;
 
-                    // Push to ring buffer for JSON generation
-                    if (jsonOutputEnabled_ && jsonRingBuffer_) {
+                    // Push to ring buffer for JSON generation (always enabled)
+                    if (jsonRingBuffer_) {
                         MboMessageWrapper wrapper(mbo);
-                        if (!jsonRingBuffer_->try_push(wrapper)) {
-                            // drop JSON silently when buffer is full
-                        }
+                        // Blocking push to preserve order and avoid drops
+                        jsonRingBuffer_->push(wrapper);
                     }
 
                 } catch (const std::invalid_argument& e) {
@@ -235,15 +272,7 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                     utils::logError("Error processing order: " + std::string(e.what()));
                 }
 
-                processedBytes += sizeof(MboMessage);
-            }
-
-            // Move remaining unprocessed bytes to beginning of buffer (at most once per read)
-            if (processedBytes > 0) {
-                bufferPos -= processedBytes;
-                if (bufferPos > 0) {
-                    memmove(buffer, buffer + processedBytes, bufferPos);
-                }
+                head = (head + sizeof(MboMessage)) % kBufSize;
             }
         }
     } catch (const std::exception& e) {
@@ -429,15 +458,11 @@ void TCPReceiver::flushJsonBufferInternal() {
     }
     
     // Write all buffered JSON strings to file at once
-    if (!jsonOutputFile_.empty()) {
-        std::ofstream file(jsonOutputFile_, std::ios::app);
-        if (file.is_open()) {
-            for (const auto& json : jsonBuffer_) {
-                file << json << std::endl;
-            }
-            file.flush(); // Force flush to disk
-            file.close();
+    if (jsonFile_.is_open()) {
+        for (const auto& json : jsonBuffer_) {
+            jsonFile_ << json << std::endl;
         }
+        jsonFile_.flush();
     }
     
     // Clear the buffer

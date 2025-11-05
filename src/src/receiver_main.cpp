@@ -26,7 +26,6 @@ int main() {
     receiver->setSymbol(cfg.getString("receiver.symbol", "CLX5"));
     receiver->setTopLevels(cfg.getInt("receiver.top_levels", 10));
     receiver->setOutputFullBook(cfg.getBool("receiver.output_full_book", true));
-    receiver->enableJsonOutput(cfg.getBool("receiver.json_enabled", true));
     receiver->setJsonOutputFile(cfg.getString("receiver.json_output_file", "/Users/hang/github_repo/assignment/src/data/order_book_output.json"));
     
     // Configure JSON batching for optimal performance

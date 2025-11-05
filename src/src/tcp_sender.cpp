@@ -1,6 +1,5 @@
 #include "tcp_sender.hpp"
 #include "utils.hpp"
-#include <iostream>
 #include <chrono>
 #include <cstring>
 #include <algorithm>
@@ -13,46 +12,16 @@
 #endif
 
 TCPSender::TCPSender() 
-    : port_(8080), delayMs_(0), zeroCopyMode_(false), batchSize_(100),
-      serverSocket_(-1), clientSocket_(-1), fileDescriptor_(-1),
-      mappedFile_(nullptr), fileSize_(0), streaming_(false), sentMessages_(0) {
+    : port_(8080), batchSize_(100),
+      serverSocket_(-1), clientSocket_(-1),
+      streaming_(false), sentMessages_(0) {
 }
 
 TCPSender::~TCPSender() {
     stopStreaming();
-    cleanup();
 }
 
-bool TCPSender::loadFromFile(const std::string& filePath) {
-    // Open file for memory mapping
-    fileDescriptor_ = open(filePath.c_str(), O_RDONLY);
-    if (fileDescriptor_ == -1) {
-        utils::logError("Failed to open file: " + filePath);
-        return false;
-    }
-    
-    // Get file size
-    struct stat fileStat;
-    if (fstat(fileDescriptor_, &fileStat) == -1) {
-        utils::logError("Failed to get file size");
-        close(fileDescriptor_);
-        fileDescriptor_ = -1;
-        return false;
-    }
-    fileSize_ = fileStat.st_size;
-    
-    // Memory map the file
-    mappedFile_ = mmap(nullptr, fileSize_, PROT_READ, MAP_PRIVATE, fileDescriptor_, 0);
-    if (mappedFile_ == MAP_FAILED) {
-        utils::logError("Failed to memory map file");
-        close(fileDescriptor_);
-        fileDescriptor_ = -1;
-        return false;
-    }
-    
-    // Loaded file: size info
-    return true;
-}
+// Removed unused file mapping path
 
 bool TCPSender::setupServer() {
     // Create socket
@@ -103,10 +72,12 @@ bool TCPSender::setupServer() {
 void TCPSender::startStreaming() {
     if (streaming_) {
         utils::logWarning("Streaming already in progress");
+        streaming_ = false;
         return;
     }
     
     if (!setupServer()) {
+        streaming_ = false;
         return;
     }
     
@@ -160,6 +131,11 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     if (setsockopt(clientSocket_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == -1) {
         utils::logWarning("Failed to set TCP_NODELAY on client socket");
     }
+    // Increase sender send buffer for higher throughput
+    int sendBufSize = 32 * 1024 * 1024; // 32 MiB
+    if (setsockopt(clientSocket_, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize)) == -1) {
+        utils::logWarning("Failed to set SO_SNDBUF on client socket");
+    }
     
     // Note: Client socket buffer optimization removed to avoid warnings
     
@@ -176,6 +152,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     buffer[bytesReceived] = '\0';
     if (strcmp(buffer, "START_STREAMING") != 0) {
         utils::logError("Invalid signal received: " + std::string(buffer));
+        streaming_ = false;
         return;
     }
     
@@ -246,10 +223,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
                 batchBuffer.clear();
             }
             
-            // Optional delay (set to 0 for maximum throughput)
-            if (delayMs_ > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
-            }
+            // No inter-message delay (maximum throughput)
         }
         // Send any remaining messages in the buffer
         if (!batchBuffer.empty() && sendBatchMessages(clientSocket_, batchBuffer)) {
@@ -261,65 +235,11 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     
     auto streamEnd = std::chrono::high_resolution_clock::now();
     endTime_ = streamEnd;
-    auto streamDuration = std::chrono::duration_cast<std::chrono::milliseconds>(streamEnd - streamStart);
-    
-    // Final statistics
-    std::cout << "\n=== TCP Sender Final Statistics ===" << std::endl;
-    std::cout << "Streaming Time: " << streamDuration.count() << " ms" << std::endl;
-    std::cout << "Messages Sent: " << sentMessages_ << std::endl;
-    if (streamDuration.count() > 0) {
-        double messagesPerSecond = (double)sentMessages_ * 1000.0 / streamDuration.count();
-        std::cout << "Throughput: " << std::fixed << std::setprecision(0) << messagesPerSecond << " messages/sec" << std::endl;
-    }
-    std::cout << "===================================" << std::endl;
-    
-    // Data transmission completed
     
     // Close client socket to signal end of transmission
     close(clientSocket_);
     clientSocket_ = -1;
-}
-
-bool TCPSender::sendMboMessage(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp) {
-    MboMessage msg;
-    msg.ts_event = timestamp;
-    msg.ts_recv = timestamp + 1;
-    msg.rtype = static_cast<uint8_t>(mbo.hd.rtype);
-    msg.publisher_id = mbo.hd.publisher_id;
-    msg.instrument_id = mbo.hd.instrument_id;
-    msg.action = static_cast<uint8_t>(mbo.action);
-    msg.side = static_cast<uint8_t>(mbo.side);
-    msg.price = mbo.price;
-    msg.size = mbo.size;
-    msg.channel_id = mbo.channel_id;
-    msg.order_id = mbo.order_id;
-    msg.flags = static_cast<uint8_t>(mbo.flags);
-    msg.ts_in_delta = mbo.ts_in_delta.count();
-    msg.sequence = mbo.sequence;
-    
-    return sendData(clientSocket, &msg, sizeof(msg));
-}
-
-bool TCPSender::sendMboMessageFast(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp) {
-    // Send FULL message with all 14 fields - preserve original file order
-    MboMessage msg;
-    msg.ts_event = timestamp;  // Use original timestamp from file
-    msg.ts_recv = timestamp + 1;  // Keep ts_recv slightly after ts_event
-    msg.rtype = static_cast<uint8_t>(mbo.hd.rtype);
-    msg.publisher_id = mbo.hd.publisher_id;
-    msg.instrument_id = mbo.hd.instrument_id;
-    msg.action = static_cast<uint8_t>(mbo.action);
-    msg.side = static_cast<uint8_t>(mbo.side);
-    msg.price = mbo.price;
-    msg.size = mbo.size;
-    msg.channel_id = mbo.channel_id;
-    msg.order_id = mbo.order_id;
-    msg.flags = static_cast<uint8_t>(mbo.flags);
-    msg.ts_in_delta = mbo.ts_in_delta.count();
-    msg.sequence = mbo.sequence;
-    
-    // Send complete message directly - same approach as working streamer
-    return sendData(clientSocket, &msg, sizeof(msg));
+    streaming_ = false;
 }
 
 bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages) {
@@ -339,48 +259,19 @@ bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage
     return bytesSent == totalBytes;
 }
 
-bool TCPSender::sendData(int clientSocket, const void* data, size_t size) {
-    ssize_t bytesSent = write(clientSocket, data, size);
-    return bytesSent == static_cast<ssize_t>(size);
-}
-
-bool TCPSender::sendFileZeroCopy(int clientSocket) {
-    if (!mappedFile_ || fileSize_ == 0) {
-        return false;
-    }
-    
-#ifdef __APPLE__
-    // macOS sendfile - correct signature
-    off_t offset = 0;
-    off_t bytesSent = 0;
-    int result = sendfile(fileDescriptor_, clientSocket, offset, &bytesSent, nullptr, 0);
-    return result == 0 && bytesSent == static_cast<off_t>(fileSize_);
-#else
-    // Linux sendfile
-    ssize_t bytesSent = sendfile(clientSocket, fileDescriptor_, nullptr, fileSize_);
-    return bytesSent == static_cast<ssize_t>(fileSize_);
-#endif
-}
-
 double TCPSender::getThroughput() const {
     if (sentMessages_ == 0) return 0.0;
-    
-    auto now = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime_);
-    
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - startTime_);
     if (duration.count() == 0) return 0.0;
     
     return (double)sentMessages_ * 1000.0 / duration.count();
 }
 
-void TCPSender::cleanup() {
-    if (mappedFile_ != nullptr && mappedFile_ != MAP_FAILED) {
-        munmap(mappedFile_, fileSize_);
-        mappedFile_ = nullptr;
-    }
-    
-    if (fileDescriptor_ != -1) {
-        close(fileDescriptor_);
-        fileDescriptor_ = -1;
-    }
+long long TCPSender::getStreamingMs() const {
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - startTime_);
+    return duration.count();
 }
+
+// Removed unused helpers

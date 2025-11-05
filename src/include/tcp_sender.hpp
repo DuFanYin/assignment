@@ -8,10 +8,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <netinet/tcp.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/uio.h>
 #include <databento/record.hpp>
 #include <databento/enums.hpp>
@@ -22,13 +19,10 @@ public:
     ~TCPSender();
 
     // Configuration
-    void setDelayMs(int delayMs) { delayMs_ = delayMs; }
-    void setZeroCopyMode(bool enabled) { zeroCopyMode_ = enabled; }
     void setPort(int port) { port_ = port; }
     void setBatchSize(size_t batchSize) { batchSize_ = batchSize; }
 
     // Data loading and streaming
-    bool loadFromFile(const std::string& filePath);
     void startStreaming();
     void stopStreaming();
     bool isStreaming() const { return streaming_; }
@@ -36,23 +30,17 @@ public:
     // Statistics
     size_t getSentMessages() const { return sentMessages_; }
     double getThroughput() const;
+    long long getStreamingMs() const;
 
 private:
     // Configuration
     int port_;
-    int delayMs_;
-    bool zeroCopyMode_;
     size_t batchSize_;
     
     // Network
     int serverSocket_;
     int clientSocket_;
     struct sockaddr_in serverAddr_;
-    
-    // File handling
-    int fileDescriptor_;
-    void* mappedFile_;
-    size_t fileSize_;
     
     // State
     std::atomic<bool> streaming_;
@@ -84,10 +72,5 @@ private:
     // Methods
     bool setupServer();
     void streamingLoop(std::stop_token stopToken);
-    bool sendMboMessage(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
-    bool sendMboMessageFast(int clientSocket, const databento::MboMsg& mbo, uint64_t timestamp);
     bool sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages);
-    bool sendData(int clientSocket, const void* data, size_t size);
-    bool sendFileZeroCopy(int clientSocket);
-    void cleanup();
 };

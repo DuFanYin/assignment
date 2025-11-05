@@ -15,17 +15,8 @@ int main() {
     cfg.loadFromFile(cfgPath);
 
     auto sender = std::make_unique<TCPSender>();
-    sender->setDelayMs(cfg.getInt("sender.delay_ms", 0));
-    sender->setZeroCopyMode(cfg.getBool("sender.zero_copy", false));
     sender->setPort(cfg.getInt("sender.port", 8080));
     sender->setBatchSize(cfg.getInt("sender.batch_size", 100));
-
-    // Load data file
-    std::string dataFile = cfg.getString("sender.data_file", "/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn");
-    if (!sender->loadFromFile(dataFile)) {
-        utils::logError("Failed to load data file: " + dataFile);
-        return 1;
-    }
     
     // Start streaming
     sender->startStreaming();
@@ -37,6 +28,7 @@ int main() {
     
     // Results (preserved)
     std::cout << "\n=== STREAMING COMPLETED ===" << std::endl;
+    std::cout << "Streaming Time: " << sender->getStreamingMs() << " ms" << std::endl;
     std::cout << "Total Messages Sent: " << sender->getSentMessages() << std::endl;
     std::cout << "Average Throughput: " << std::fixed << std::setprecision(2) 
               << sender->getThroughput() << " messages/sec" << std::endl;

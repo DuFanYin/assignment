@@ -73,6 +73,10 @@ huge performace boost
 
 fix bugs and apply ring buffer to microservice version
 
+1hr
+
+implement cpp 20 standard on src version, and other minor tuning, clean up
+
 
 
 
