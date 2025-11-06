@@ -21,6 +21,7 @@ public:
     // Configuration
     void setPort(int port) { port_ = port; }
     void setBatchSize(size_t batchSize) { batchSize_ = batchSize; }
+    void setDataFile(const std::string& dataFile) { dataFile_ = dataFile; }
 
     // Data loading and streaming
     void startStreaming();
@@ -31,11 +32,13 @@ public:
     size_t getSentMessages() const { return sentMessages_; }
     double getThroughput() const;
     long long getStreamingMs() const;
+    long long getStreamingUs() const; // microseconds for higher precision
 
 private:
     // Configuration
     int port_;
     size_t batchSize_;
+    std::string dataFile_;
     
     // Network
     int serverSocket_;

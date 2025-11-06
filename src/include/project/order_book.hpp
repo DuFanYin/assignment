@@ -25,6 +25,7 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <ranges>
 
 namespace db = databento;
 
@@ -313,7 +314,7 @@ class Book {
 
   static LevelOrders::iterator GetLevelOrder(LevelOrders& level,
                                              uint64_t order_id) {
-    auto order_it = std::find_if(level.begin(), level.end(),
+    auto order_it = std::ranges::find_if(level,
                                  [order_id](const db::MboMsg& order) {
                                    return order.order_id == order_id;
                                  });
@@ -457,7 +458,7 @@ class Market {
 
   const Book& GetBook(uint32_t instrument_id, uint16_t publisher_id) {
     const std::vector<PublisherBook>& books = GetBooksByPub(instrument_id);
-    auto book_it = std::find_if(books.begin(), books.end(),
+    auto book_it = std::ranges::find_if(books,
                                 [publisher_id](const PublisherBook& pub_book) {
                                   return pub_book.publisher_id == publisher_id;
                                 });
@@ -504,7 +505,7 @@ class Market {
   void Apply(const db::MboMsg& mbo_msg) {
     auto& instrument_books = books_[mbo_msg.hd.instrument_id];
     auto book_it =
-        std::find_if(instrument_books.begin(), instrument_books.end(),
+        std::ranges::find_if(instrument_books,
                      [&mbo_msg](const PublisherBook& pub_book) {
                        return pub_book.publisher_id == mbo_msg.hd.publisher_id;
                      });

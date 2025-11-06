@@ -1,9 +1,10 @@
-#include "tcp_sender.hpp"
-#include "utils.hpp"
+#include "project/tcp_sender.hpp"
+#include "project/utils.hpp"
 #include <chrono>
 #include <cstring>
 #include <algorithm>
 #include <databento/dbn_file_store.hpp>
+#include <span>
 
 #ifdef __APPLE__
 #include <mach/thread_act.h>
@@ -161,7 +162,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     // Load and pre-parse the entire DBN file for maximum performance
     std::unique_ptr<databento::DbnFileStore> store;
     try {
-        store = std::make_unique<databento::DbnFileStore>("/Users/hang/github_repo/assignment/src/data/CLX5_mbo.dbn");
+        store = std::make_unique<databento::DbnFileStore>(dataFile_);
     } catch (const std::exception& e) {
         utils::logError("Failed to open DBN file: " + std::string(e.what()));
         return;
@@ -183,9 +184,8 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     // Batch I/O with writev for maximum throughput
     std::vector<MboMessage> batchBuffer;
     batchBuffer.reserve(batchSize_);
-    // Start streaming messages
-    auto streamStart = std::chrono::high_resolution_clock::now();
-    startTime_ = streamStart;
+    // Start streaming messages - timing starts here
+    startTime_ = std::chrono::high_resolution_clock::now();
     
     try {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {
@@ -250,27 +250,35 @@ bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage
     iovecs.reserve(messages.size());
     for (const auto& msg : messages) {
         struct iovec iov;
-        iov.iov_base = reinterpret_cast<void*>(const_cast<MboMessage*>(&msg));
-        iov.iov_len = sizeof(MboMessage);
+        std::span<const std::byte> msgSpan{reinterpret_cast<const std::byte*>(&msg), sizeof(MboMessage)};
+        iov.iov_base = const_cast<void*>(reinterpret_cast<const void*>(msgSpan.data()));
+        iov.iov_len = msgSpan.size();
         iovecs.push_back(iov);
     }
     ssize_t totalBytes = messages.size() * sizeof(MboMessage);
-    ssize_t bytesSent = writev(clientSocket, iovecs.data(), static_cast<int>(iovecs.size()));
+    std::span<const struct iovec> iovecsSpan{iovecs};
+    ssize_t bytesSent = writev(clientSocket, const_cast<struct iovec*>(iovecsSpan.data()), static_cast<int>(iovecsSpan.size()));
     return bytesSent == totalBytes;
 }
 
 double TCPSender::getThroughput() const {
     if (sentMessages_ == 0) return 0.0;
     auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - startTime_);
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
     if (duration.count() == 0) return 0.0;
     
-    return (double)sentMessages_ * 1000.0 / duration.count();
+    return (double)sentMessages_ * 1000000.0 / duration.count();
 }
 
 long long TCPSender::getStreamingMs() const {
     auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - startTime_);
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
+    return duration.count() / 1000; // Convert microseconds to milliseconds
+}
+
+long long TCPSender::getStreamingUs() const {
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
     return duration.count();
 }
 

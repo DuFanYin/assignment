@@ -1,5 +1,5 @@
-#include "../include/tcp_receiver.hpp"
-#include "utils.hpp"
+#include "project/tcp_receiver.hpp"
+#include "project/utils.hpp"
 #include <iostream>
 #include <chrono>
 #include <cstring>
@@ -9,6 +9,9 @@
 #include <iomanip>
 #include <algorithm>
 #include <numeric>
+#include <format>
+#include <ranges>
+#include <span>
 
 TCPReceiver::TCPReceiver() 
     : host_("127.0.0.1"), port_(8080), orderBook_(nullptr), symbol_(""), 
@@ -205,7 +208,8 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                 tail = (tail + 0) % kBufSize;
                 continue;
             }
-            ssize_t bytesReceived = read(clientSocket_, buffer.data() + tail, contiguous);
+            std::span<char> writeSpan{buffer.data() + tail, contiguous};
+            ssize_t bytesReceived = read(clientSocket_, writeSpan.data(), writeSpan.size());
             
             if (bytesReceived <= 0) {
                 if (bytesReceived != 0) {
@@ -223,12 +227,14 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                 // If message wraps, copy to a local aligned storage
                 MboMessage localMsg;
                 if (head + sizeof(MboMessage) <= kBufSize) {
-                    const MboMessage* msg = reinterpret_cast<const MboMessage*>(buffer.data() + head);
-                    std::memcpy(&localMsg, msg, sizeof(MboMessage));
+                    std::span<const char> msgSpan{buffer.data() + head, sizeof(MboMessage)};
+                    std::memcpy(&localMsg, msgSpan.data(), sizeof(MboMessage));
                 } else {
                     size_t first_part = kBufSize - head;
-                    std::memcpy(reinterpret_cast<char*>(&localMsg), buffer.data() + head, first_part);
-                    std::memcpy(reinterpret_cast<char*>(&localMsg) + first_part, buffer.data(), sizeof(MboMessage) - first_part);
+                    std::span<const char> firstSpan{buffer.data() + head, first_part};
+                    std::span<const char> secondSpan{buffer.data(), sizeof(MboMessage) - first_part};
+                    std::memcpy(reinterpret_cast<char*>(&localMsg), firstSpan.data(), first_part);
+                    std::memcpy(reinterpret_cast<char*>(&localMsg) + first_part, secondSpan.data(), sizeof(MboMessage) - first_part);
                 }
 
                 // Start timing on first message processed
@@ -320,14 +326,12 @@ databento::MboMsg TCPReceiver::convertToDatabentoMbo(const MboMessage& msg) {
 
 void TCPReceiver::jsonGenerationLoop(std::stop_token stopToken) {
     MboMessageWrapper wrapper;
-    size_t jsonCount = 0;
     while (!stopToken.stop_requested() || !jsonRingBuffer_->empty()) {
         if (jsonRingBuffer_->try_pop(wrapper)) {
             try {
                 std::string json = generateJsonOutput(wrapper.mbo);
                 addJsonToBuffer(json);
                 jsonOutputs_++;
-                jsonCount++;
             } catch (const std::exception& e) {
                 utils::logError("Error generating JSON: " + std::string(e.what()));
             }
@@ -344,56 +348,60 @@ void TCPReceiver::jsonGenerationLoop(std::stop_token stopToken) {
 }
 
 std::string TCPReceiver::generateJsonOutput(const db::MboMsg& mbo) {
-    std::stringstream json;
-    json << "{";
+    std::string json;
+    json.reserve(512); // Pre-allocate reasonable size
+    
+    json += "{";
     if (!symbol_.empty()) {
-        json << "\"symbol\":\"" << symbol_ << "\",";
+        json += std::format("\"symbol\":\"{}\",", symbol_);
     }
-    json << "\"timestamp\":\"" << std::to_string(mbo.hd.ts_event.time_since_epoch().count()) << "\",";
-    json << "\"timestamp_ns\":" << mbo.hd.ts_event.time_since_epoch().count() << ",";
+    auto ts_ns = mbo.hd.ts_event.time_since_epoch().count();
+    json += std::format("\"timestamp\":\"{}\",", ts_ns);
+    json += std::format("\"timestamp_ns\":{},", ts_ns);
     if (orderBook_) {
         // Protect read access with shared lock to avoid data races
         std::shared_lock<std::shared_mutex> readLock(orderBookMutex_);
-        auto bbo = orderBook_->Bbo();
-        json << "\"bbo\":{";
-        if (bbo.first.price != databento::kUndefPrice) {
-            json << "\"bid\":{\"price\":\"" << std::to_string(bbo.first.price) << "\",\"size\":" << bbo.first.size << ",\"count\":" << bbo.first.count << "}";
+        auto [bid, ask] = orderBook_->Bbo();
+        json += "\"bbo\":{";
+        if (bid.price != databento::kUndefPrice) {
+            json += std::format("\"bid\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                               std::to_string(bid.price), bid.size, bid.count);
         } else {
-            json << "\"bid\":null";
+            json += "\"bid\":null";
         }
-        json << ",";
-        if (bbo.second.price != databento::kUndefPrice) {
-            json << "\"ask\":{\"price\":\"" << std::to_string(bbo.second.price) << "\",\"size\":" << bbo.second.size << ",\"count\":" << bbo.second.count << "}";
+        json += ",";
+        if (ask.price != databento::kUndefPrice) {
+            json += std::format("\"ask\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                               std::to_string(ask.price), ask.size, ask.count);
         } else {
-            json << "\"ask\":null";
+            json += "\"ask\":null";
         }
-        json << "},";
+        json += "},";
         size_t bidCount = std::min(topLevels_, orderBook_->GetBidLevelCount());
         size_t askCount = std::min(topLevels_, orderBook_->GetAskLevelCount());
-        json << "\"levels\":{";
-        json << "\"bids\":[";
+        json += "\"levels\":{";
+        json += "\"bids\":[";
         for (size_t i = 0; i < bidCount; ++i) {
             auto bid = orderBook_->GetBidLevel(i);
             if (!bid || bid.price == databento::kUndefPrice) break;
-            if (i > 0) json << ",";
-            json << "{\"price\":\"" << std::to_string(bid.price) << "\",\"size\":" << bid.size << ",\"count\":" << bid.count << "}";
+            if (i > 0) json += ",";
+            json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                               std::to_string(bid.price), bid.size, bid.count);
         }
-        json << "],\"asks\":[";
+        json += "],\"asks\":[";
         for (size_t i = 0; i < askCount; ++i) {
             auto ask = orderBook_->GetAskLevel(i);
             if (!ask || ask.price == databento::kUndefPrice) break;
-            if (i > 0) json << ",";
-            json << "{\"price\":\"" << std::to_string(ask.price) << "\",\"size\":" << ask.size << ",\"count\":" << ask.count << "}";
+            if (i > 0) json += ",";
+            json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                               std::to_string(ask.price), ask.size, ask.count);
         }
-        json << "]},";
-        json << "\"stats\":{";
-        json << "\"total_orders\":" << orderBook_->GetOrderCount() << ",";
-        json << "\"bid_levels\":" << orderBook_->GetBidLevelCount() << ",";
-        json << "\"ask_levels\":" << orderBook_->GetAskLevelCount();
-        json << "}";
+        json += "]},";
+        json += std::format("\"stats\":{{\"total_orders\":{},\"bid_levels\":{},\"ask_levels\":{}}}", 
+                           orderBook_->GetOrderCount(), orderBook_->GetBidLevelCount(), orderBook_->GetAskLevelCount());
     }
-    json << "}";
-    return json.str();
+    json += "}";
+    return json;
 }
 
 double TCPReceiver::getThroughput() const {
@@ -410,7 +418,7 @@ double TCPReceiver::getThroughput() const {
 
 double TCPReceiver::getAverageOrderProcessNs() const {
     if (orderProcessTimesNs_.empty()) return 0.0;
-    uint64_t sumNs = std::accumulate(orderProcessTimesNs_.begin(), orderProcessTimesNs_.end(), (uint64_t)0);
+    uint64_t sumNs = std::accumulate(orderProcessTimesNs_.begin(), orderProcessTimesNs_.end(), uint64_t{0});
     return static_cast<double>(sumNs) / static_cast<double>(orderProcessTimesNs_.size());
 }
 

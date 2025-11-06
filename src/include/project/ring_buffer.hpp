@@ -11,8 +11,13 @@
  * Based on Disruptor pattern for high-performance queue
  */
 template<typename T>
+requires std::copyable<T>
 class RingBuffer {
 public:
+    constexpr static bool is_power_of_two(size_t n) noexcept {
+        return n > 0 && (n & (n - 1)) == 0;
+    }
+    
     explicit RingBuffer(size_t capacity) 
         : capacity_(capacity)
         , mask_(capacity_ - 1)  // For power-of-2 sizes
@@ -20,7 +25,7 @@ public:
         , read_pos_(0)
         , write_pos_(0) {
         // Ensure capacity is power of 2
-        if ((capacity_ & (capacity_ - 1)) != 0) {
+        if (!is_power_of_two(capacity_)) {
             throw std::invalid_argument("Ring buffer capacity must be power of 2");
         }
     }
