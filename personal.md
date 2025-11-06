@@ -77,6 +77,10 @@ fix bugs and apply ring buffer to microservice version
 
 implement cpp 20 standard on src version, and other minor tuning, clean up
 
+30 min
+
+clean up folder, remove unused inbook json generation
+
 
 
 

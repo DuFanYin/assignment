@@ -121,8 +121,7 @@ void TCPReceiver::startReceiving() {
         return;
     }
     
-    // Configure order book - JSON generation will happen in separate thread
-    orderBook_->enableJsonOutput(false);
+    // JSON generation happens in separate thread (jsonGenerationThread_)
     
     // Open JSON file once (append mode)
     if (!jsonOutputFile_.empty()) {
