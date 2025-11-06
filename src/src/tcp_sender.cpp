@@ -5,13 +5,7 @@
 #include <algorithm>
 #include <databento/dbn_file_store.hpp>
 #include <span>
-
-#ifdef __APPLE__
-#include <mach/thread_act.h>
-#include <mach/thread_policy.h>
-#include <mach/mach_init.h>
-#endif
-
+ 
 TCPSender::TCPSender() 
     : port_(8080), batchSize_(100),
       serverSocket_(-1), clientSocket_(-1),
@@ -22,8 +16,6 @@ TCPSender::~TCPSender() {
     stopStreaming();
 }
 
-// Removed unused file mapping path
-
 bool TCPSender::setupServer() {
     // Create socket
     serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -32,7 +24,7 @@ bool TCPSender::setupServer() {
         return false;
     }
     
-    // Set socket options for high performance
+    // Socket options
     int flag = 1;
     if (setsockopt(serverSocket_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == -1) {
         utils::logWarning("Failed to set TCP_NODELAY");
@@ -41,8 +33,6 @@ bool TCPSender::setupServer() {
     if (setsockopt(serverSocket_, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag)) == -1) {
         utils::logWarning("Failed to set SO_REUSEADDR");
     }
-    
-    // Note: Socket buffer optimization removed to avoid warnings
     
     // Configure server address
     memset(&serverAddr_, 0, sizeof(serverAddr_));
@@ -58,7 +48,7 @@ bool TCPSender::setupServer() {
         return false;
     }
     
-    // Listen for connections
+    // Listen
     if (listen(serverSocket_, 1) == -1) {
         utils::logError("Failed to listen on socket");
         close(serverSocket_);
@@ -66,7 +56,7 @@ bool TCPSender::setupServer() {
         return false;
     }
     
-    // TCP server listening on port
+    // Ready
     return true;
 }
 
@@ -116,31 +106,28 @@ void TCPSender::stopStreaming() {
 }
 
 void TCPSender::streamingLoop(std::stop_token stopToken) {
-    // Wait for client connection
+    // Wait for client
     struct sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
     
-    // Waiting for client connection
     clientSocket_ = accept(serverSocket_, (struct sockaddr*)&clientAddr, &clientAddrLen);
     if (clientSocket_ == -1) {
         utils::logError("Failed to accept client connection");
         return;
     }
     
-    // Set client socket options for high performance
+    // Client socket options
     int flag = 1;
     if (setsockopt(clientSocket_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == -1) {
         utils::logWarning("Failed to set TCP_NODELAY on client socket");
     }
-    // Increase sender send buffer for higher throughput
+    // Larger send buffer for throughput
     int sendBufSize = 32 * 1024 * 1024; // 32 MiB
     if (setsockopt(clientSocket_, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize)) == -1) {
         utils::logWarning("Failed to set SO_SNDBUF on client socket");
     }
     
-    // Note: Client socket buffer optimization removed to avoid warnings
-    
-    // Client connected successfully
+    // Connected
     
     // Wait for START_STREAMING signal
     char buffer[32];
@@ -157,9 +144,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
         return;
     }
     
-    // Note: CPU affinity and real-time priority optimizations removed to avoid warnings
-    
-    // Load and pre-parse the entire DBN file for maximum performance
+    // Load and pre-parse the entire DBN file
     std::unique_ptr<databento::DbnFileStore> store;
     try {
         store = std::make_unique<databento::DbnFileStore>(dataFile_);
@@ -179,13 +164,11 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
         }
     }
     
-    // Pre-parsed MBO messages for streaming
-    
-    // Batch I/O with writev for maximum throughput
+    // Batch I/O with writev
     std::vector<MboMessage> batchBuffer;
     batchBuffer.reserve(batchSize_);
     // Start streaming messages - timing starts here
-    startTime_ = std::chrono::high_resolution_clock::now();
+    startTime_ = std::chrono::steady_clock::now();
     
     try {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {
@@ -194,7 +177,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
             }
             const auto& mbo = allMessages[i];
             
-            // Prepare message with ORIGINAL timestamp to preserve file order
+            // Preserve original timestamp to maintain file order
             uint64_t originalTimestamp = mbo.hd.ts_event.time_since_epoch().count();
             MboMessage msg;
             msg.ts_event = originalTimestamp;
@@ -223,7 +206,7 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
                 batchBuffer.clear();
             }
             
-            // No inter-message delay (maximum throughput)
+            // No inter-message delay
         }
         // Send any remaining messages in the buffer
         if (!batchBuffer.empty() && sendBatchMessages(clientSocket_, batchBuffer)) {
@@ -233,13 +216,34 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
         utils::logError("Error during streaming: " + std::string(e.what()));
     }
     
-    auto streamEnd = std::chrono::high_resolution_clock::now();
+    auto streamEnd = std::chrono::steady_clock::now();
     endTime_ = streamEnd;
     
-    // Close client socket to signal end of transmission
+    // Close client socket to signal end
     close(clientSocket_);
     clientSocket_ = -1;
     streaming_ = false;
+}
+
+double TCPSender::getThroughput() const {
+    if (sentMessages_ == 0) return 0.0;
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
+    if (duration.count() == 0) return 0.0;
+    
+    return (double)sentMessages_ * 1000000.0 / duration.count();
+}
+
+long long TCPSender::getStreamingMs() const {
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
+    return duration.count() / 1000; // microseconds to milliseconds
+}
+
+long long TCPSender::getStreamingUs() const {
+    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
+    return duration.count();
 }
 
 bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage>& messages) {
@@ -261,25 +265,3 @@ bool TCPSender::sendBatchMessages(int clientSocket, const std::vector<MboMessage
     return bytesSent == totalBytes;
 }
 
-double TCPSender::getThroughput() const {
-    if (sentMessages_ == 0) return 0.0;
-    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
-    if (duration.count() == 0) return 0.0;
-    
-    return (double)sentMessages_ * 1000000.0 / duration.count();
-}
-
-long long TCPSender::getStreamingMs() const {
-    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
-    return duration.count() / 1000; // Convert microseconds to milliseconds
-}
-
-long long TCPSender::getStreamingUs() const {
-    auto endTimeToUse = (endTime_ > startTime_) ? endTime_ : std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTimeToUse - startTime_);
-    return duration.count();
-}
-
-// Removed unused helpers

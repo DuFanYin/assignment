@@ -17,6 +17,7 @@ add_library(project_lib
     tcp_receiver.cpp
     tcp_sender.cpp
     utils.cpp
+    json_writer.cpp
 )
 
 target_include_directories(project_lib PUBLIC

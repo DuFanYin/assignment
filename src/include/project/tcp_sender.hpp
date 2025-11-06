@@ -51,8 +51,8 @@ private:
     std::jthread streamingThread_;
     
     // Timing
-    std::chrono::high_resolution_clock::time_point startTime_;
-    std::chrono::high_resolution_clock::time_point endTime_;
+    std::chrono::steady_clock::time_point startTime_;
+    std::chrono::steady_clock::time_point endTime_;
     
     // Binary message format for TCP transmission
     struct MboMessage {

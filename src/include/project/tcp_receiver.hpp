@@ -20,18 +20,18 @@
 #include "ring_buffer.hpp"
 #include <databento/datetime.hpp>
 #include <sstream>
-#include <fstream>
+#include "json_writer.hpp"
 
 namespace db = databento;
 
 // Message wrapper for ring buffer
 struct MboMessageWrapper {
     db::MboMsg mbo;
-    std::chrono::high_resolution_clock::time_point timestamp;
+    std::chrono::steady_clock::time_point timestamp;
     
     MboMessageWrapper() = default;
     MboMessageWrapper(const db::MboMsg& msg) : mbo(msg) {
-        timestamp = std::chrono::high_resolution_clock::now();
+        timestamp = std::chrono::steady_clock::now();
     }
 };
 
@@ -83,7 +83,7 @@ private:
     size_t jsonFlushInterval_;
     std::vector<std::string> jsonBuffer_;
     std::mutex jsonBufferMutex_;
-    std::ofstream jsonFile_;
+    std::unique_ptr<MmapJsonWriter> jsonWriter_;
     
     // Network
     int clientSocket_;
@@ -100,11 +100,11 @@ private:
     
     // Ring buffer for decoupling order book processing from JSON generation
     std::unique_ptr<RingBuffer<MboMessageWrapper>> jsonRingBuffer_;
-    mutable std::shared_mutex orderBookMutex_;
+    mutable OrderBookLock orderBookLock_;
     
     // Timing
-    std::chrono::high_resolution_clock::time_point startTime_;
-    std::chrono::high_resolution_clock::time_point endTime_;
+    std::chrono::steady_clock::time_point startTime_;
+    std::chrono::steady_clock::time_point endTime_;
     std::vector<uint64_t> orderProcessTimesNs_;  // Per-order processing times
     
     // Methods
