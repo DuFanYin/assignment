@@ -5,7 +5,6 @@
 #include <thread>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <vector>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,13 +23,32 @@
 
 namespace db = databento;
 
+// Minimal snapshot types captured under writer lock
+struct LevelEntry {
+    int64_t price{db::kUndefPrice};
+    uint32_t size{0};
+    uint32_t count{0};
+};
+
+struct BookSnapshot {
+    std::string_view symbol;
+    int64_t ts_ns{0};
+    PriceLevel bid{};
+    PriceLevel ask{};
+    std::vector<LevelEntry> bids; // top N bid levels, highest first
+    std::vector<LevelEntry> asks; // top N ask levels, lowest first
+    size_t total_orders{0};
+    size_t bid_levels{0};
+    size_t ask_levels{0};
+};
+
 // Message wrapper for ring buffer
 struct MboMessageWrapper {
-    db::MboMsg mbo;
+    BookSnapshot snapshot;
     std::chrono::steady_clock::time_point timestamp;
     
     MboMessageWrapper() = default;
-    MboMessageWrapper(const db::MboMsg& msg) : mbo(msg) {
+    explicit MboMessageWrapper(const BookSnapshot& snap) : snapshot(snap) {
         timestamp = std::chrono::steady_clock::now();
     }
 };
@@ -100,7 +118,6 @@ private:
     
     // Ring buffer for decoupling order book processing from JSON generation
     std::unique_ptr<RingBuffer<MboMessageWrapper>> jsonRingBuffer_;
-    mutable OrderBookLock orderBookLock_;
     
     // Timing
     std::chrono::steady_clock::time_point startTime_;
@@ -111,7 +128,7 @@ private:
     bool setupConnection();
     void receivingLoop(std::stop_token stopToken);
     void jsonGenerationLoop(std::stop_token stopToken);  // Runs in separate thread to generate JSON
-    std::string generateJsonOutput(const db::MboMsg& mbo);  // Generate JSON from order book
+    std::string generateJsonOutput(const BookSnapshot& snap);  // Generate JSON from captured snapshot
     bool receiveData(void* data, size_t size);
     databento::MboMsg convertToDatabentoMbo(const MboMessage& msg);
     void cleanup();

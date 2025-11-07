@@ -242,9 +242,36 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                 try {
                     databento::MboMsg mbo = convertToDatabentoMbo(localMsg);
                     auto applyStart = std::chrono::steady_clock::now();
-                    {
-                        WriteGuard lock(orderBookLock_);
-                        orderBook_->Apply(mbo);
+                    BookSnapshot snap;
+                    // Prepare fields that don't require the lock
+                    snap.symbol = symbol_;
+                    snap.ts_ns = mbo.hd.ts_event.time_since_epoch().count();
+                    // Pre-reserve outside lock to avoid heap ops in critical section
+                    snap.bids.reserve(topLevels_);
+                    snap.asks.reserve(topLevels_);
+                    // Apply update (single-threaded access; no lock needed)
+                    orderBook_->Apply(mbo);
+                    // Capture minimal snapshot immediately after apply
+                    auto bbo = orderBook_->Bbo();
+                    snap.bid = bbo.first;
+                    snap.ask = bbo.second;
+                    snap.total_orders = orderBook_->GetOrderCount();
+                    snap.bid_levels = orderBook_->GetBidLevelCount();
+                    snap.ask_levels = orderBook_->GetAskLevelCount();
+                    // Top levels
+                    size_t bidCount = std::min(topLevels_, orderBook_->GetBidLevelCount());
+                    size_t askCount = std::min(topLevels_, orderBook_->GetAskLevelCount());
+                    snap.bids.reserve(bidCount);
+                    snap.asks.reserve(askCount);
+                    for (size_t i = 0; i < bidCount; ++i) {
+                        auto lvl = orderBook_->GetBidLevel(i);
+                        if (!lvl || lvl.price == databento::kUndefPrice) break;
+                        snap.bids.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
+                    }
+                    for (size_t i = 0; i < askCount; ++i) {
+                        auto lvl = orderBook_->GetAskLevel(i);
+                        if (!lvl || lvl.price == databento::kUndefPrice) break;
+                        snap.asks.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
                     }
                     auto applyEnd = std::chrono::steady_clock::now();
                     orderProcessTimesNs_.push_back((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(applyEnd - applyStart).count());
@@ -252,7 +279,7 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
 
                     // Push to ring buffer for JSON generation
                     if (jsonRingBuffer_) {
-                        MboMessageWrapper wrapper(mbo);
+                        MboMessageWrapper wrapper(snap);
                         // Blocking push preserves order and avoids drops
                         jsonRingBuffer_->push(wrapper);
                     }
@@ -320,7 +347,7 @@ void TCPReceiver::jsonGenerationLoop(std::stop_token stopToken) {
     while (!stopToken.stop_requested() || !jsonRingBuffer_->empty()) {
         if (jsonRingBuffer_->try_pop(wrapper)) {
             try {
-                std::string json = generateJsonOutput(wrapper.mbo);
+                std::string json = generateJsonOutput(wrapper.snapshot);
                 addJsonToBuffer(json);
                 jsonOutputs_++;
             } catch (const std::exception& e) {
@@ -337,59 +364,47 @@ void TCPReceiver::jsonGenerationLoop(std::stop_token stopToken) {
     }
 }
 
-std::string TCPReceiver::generateJsonOutput(const db::MboMsg& mbo) {
+std::string TCPReceiver::generateJsonOutput(const BookSnapshot& snap) {
     std::string json;
     json.reserve(512);
     
     json += "{";
-    if (!symbol_.empty()) {
-        json += std::format("\"symbol\":\"{}\",", symbol_);
+    if (!snap.symbol.empty()) {
+        json += std::format("\"symbol\":\"{}\",", snap.symbol);
     }
-    auto ts_ns = mbo.hd.ts_event.time_since_epoch().count();
-    json += std::format("\"timestamp\":\"{}\",", ts_ns);
-    json += std::format("\"timestamp_ns\":{},", ts_ns);
-    if (orderBook_) {
-        // Read-style guard
-        ReadGuard readLock(orderBookLock_);
-        auto [bid, ask] = orderBook_->Bbo();
-        json += "\"bbo\":{";
-        if (bid.price != databento::kUndefPrice) {
-            json += std::format("\"bid\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
-                               std::to_string(bid.price), bid.size, bid.count);
-        } else {
-            json += "\"bid\":null";
-        }
-        json += ",";
-        if (ask.price != databento::kUndefPrice) {
-            json += std::format("\"ask\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
-                               std::to_string(ask.price), ask.size, ask.count);
-        } else {
-            json += "\"ask\":null";
-        }
-        json += "},";
-        size_t bidCount = std::min(topLevels_, orderBook_->GetBidLevelCount());
-        size_t askCount = std::min(topLevels_, orderBook_->GetAskLevelCount());
-        json += "\"levels\":{";
-        json += "\"bids\":[";
-        for (size_t i = 0; i < bidCount; ++i) {
-            auto bid = orderBook_->GetBidLevel(i);
-            if (!bid || bid.price == databento::kUndefPrice) break;
-            if (i > 0) json += ",";
-            json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
-                               std::to_string(bid.price), bid.size, bid.count);
-        }
-        json += "],\"asks\":[";
-        for (size_t i = 0; i < askCount; ++i) {
-            auto ask = orderBook_->GetAskLevel(i);
-            if (!ask || ask.price == databento::kUndefPrice) break;
-            if (i > 0) json += ",";
-            json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
-                               std::to_string(ask.price), ask.size, ask.count);
-        }
-        json += "]},";
-        json += std::format("\"stats\":{{\"total_orders\":{},\"bid_levels\":{},\"ask_levels\":{}}}", 
-                           orderBook_->GetOrderCount(), orderBook_->GetBidLevelCount(), orderBook_->GetAskLevelCount());
+    json += std::format("\"timestamp\":\"{}\",", snap.ts_ns);
+    json += std::format("\"timestamp_ns\":{},", snap.ts_ns);
+    json += "\"bbo\":{";
+    if (snap.bid.price != databento::kUndefPrice) {
+        json += std::format("\"bid\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                           std::to_string(snap.bid.price), snap.bid.size, snap.bid.count);
+    } else {
+        json += "\"bid\":null";
     }
+    json += ",";
+    if (snap.ask.price != databento::kUndefPrice) {
+        json += std::format("\"ask\":{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", 
+                           std::to_string(snap.ask.price), snap.ask.size, snap.ask.count);
+    } else {
+        json += "\"ask\":null";
+    }
+    json += "},";
+    json += "\"levels\":{";
+    json += "\"bids\":[";
+    for (size_t i = 0; i < snap.bids.size(); ++i) {
+        const auto& b = snap.bids[i];
+        if (i > 0) json += ",";
+        json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", std::to_string(b.price), b.size, b.count);
+    }
+    json += "],\"asks\":[";
+    for (size_t i = 0; i < snap.asks.size(); ++i) {
+        const auto& a = snap.asks[i];
+        if (i > 0) json += ",";
+        json += std::format("{{\"price\":\"{}\",\"size\":{},\"count\":{}}}", std::to_string(a.price), a.size, a.count);
+    }
+    json += "]},";
+    json += std::format("\"stats\":{{\"total_orders\":{},\"bid_levels\":{},\"ask_levels\":{}}}", 
+                       snap.total_orders, snap.bid_levels, snap.ask_levels);
     json += "}";
     return json;
 }

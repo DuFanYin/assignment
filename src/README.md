@@ -1,11 +1,11 @@
 ## Overview
 
-This `src` module implements a high-performance, reproducible TCP sender/receiver pipeline for replaying Databento MBO (Market-By-Order) data into an in-memory order book, generating JSON snapshots (always on), and reporting timing metrics.
+This `src` module implements a high-performance, reproducible TCP sender/receiver pipeline for replaying Databento MBO (Market-By-Order) data into an in-memory order book, generating JSON snapshots (always on), and reporting timing metrics. The receiver now captures an immutable snapshot immediately after each successful apply and generates JSON from that snapshot, fully decoupling JSON from the live book and eliminating read-side locking.
 
 ### Key Components
 - **TCPSender** (`src/src/tcp_sender.cpp`, `include/project/tcp_sender.hpp`): Parses DBN records via `DbnFileStore`, batches them into compact `MboMessage` frames, and streams with `writev`. Uses C++20 `std::jthread` and exposes `getSentMessages()`, `getThroughput()`, `getStreamingMs()`, and `getStreamingUs()`. Printing is handled only by `apps/sender_main.cpp`.
-- **TCPReceiver** (`src/src/tcp_receiver.cpp`, `include/project/tcp_receiver.hpp`): Accepts the stream, reconstructs `MboMsg`, applies it to the in-memory order book, decouples JSON generation via a blocking SPSC ring buffer, and tracks performance metrics. Uses C++20 `std::jthread` and `std::stop_token` for structured concurrency. JSON generation is always enabled and persisted via a portable writer that keeps the file open for append.
-- **Order Book** (`include/project/order_book.hpp`): Reference book with per-level queues. Supports `Add/Cancel/Modify/Clear`, BBO lookup, snapshots, and JSON snapshot generation hooks. Uses platform-optimized locking: `os_unfair_lock` guards on macOS, `std::shared_mutex` elsewhere.
+- **TCPReceiver** (`src/src/tcp_receiver.cpp`, `include/project/tcp_receiver.hpp`): Accepts the stream, reconstructs `MboMsg`, applies it to the in-memory order book, captures a minimal post-apply snapshot, enqueues it to a blocking SPSC ring buffer, and tracks performance metrics. Uses C++20 `std::jthread` and `std::stop_token` for structured concurrency. JSON generation is always enabled and persisted via a portable writer that keeps the file open for append.
+- **Order Book** (`include/project/order_book.hpp`): Reference book with per-level queues. Supports `Add/Cancel/Modify/Clear`, BBO lookup, and count queries. With the snapshot design, the live book is updated only by the receiving thread during processing; JSON reads no longer touch the book.
 - **RingBuffer** (`include/project/ring_buffer.hpp`): Lock-free single-producer single-consumer queue with C++20 `atomic::wait/notify`; provides blocking `push/pop` to decouple the hot path from JSON generation without drops.
 - **Config** (`src/src/config.cpp`, `include/project/config.hpp`, `config/config.ini`): Simple key-value configuration for ports, batching, symbols, and JSON settings. All configuration paths are required (no fallbacks).
 
@@ -40,7 +40,7 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
 │  │                          │     │                          │   │
 │  │  Parse MboMessage →      │     │  Generate JSON → Batch   │   │
 │  │  Apply to Order Book     │────▶│  Buffer → Flush to File  │   │
-│  │  (write lock)            │     │  (shared lock)           │   │
+│  │  + Capture Snapshot      │     │  (from snapshot only)    │   │
 │  │                          │     │                          │   │
 │  │  Push to Ring Buffer     │     │                          │   │
 │  │  (blocking)              │     │                          │   │
@@ -59,9 +59,9 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
 1. Sender loads DBN file via `DbnFileStore` and streams records in real-time.
 2. Sender batches messages (size configurable) into packed `MboMessage` frames and transmits via TCP using `writev()`.
 3. Receiver reads socket bytes into a 128 KiB circular buffer, processes complete messages without `memmove` overhead.
-4. Receiver converts `MboMessage` back to `databento::MboMsg` and applies to `Book` under a write lock.
-5. The receiving thread pushes a lightweight wrapper to a blocking SPSC ring buffer (no drops, preserves exact order).
-6. JSON generation thread pops from ring buffer, reads the book under a read-style guard to build snapshots, buffers lines, and flushes to disk in batches to a persistently-open file.
+4. Receiver converts `MboMessage` back to `databento::MboMsg` and applies to `Book` (single-threaded, no lock needed).
+5. Immediately after apply, the receiving thread captures a minimal `BookSnapshot` (BBO, top-N levels, counts, timestamp, symbol) and pushes it to a blocking SPSC ring buffer (no drops, preserves exact order).
+6. JSON generation thread pops snapshots, builds JSON strictly from the snapshot (never reading the live book), buffers lines, and flushes to disk in batches to a persistently-open file.
 
 ### Threading Model and Concurrency
 
@@ -96,17 +96,18 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
   - Socket reads into circular buffer (128 KiB)
   - Message parsing from raw bytes
   - Conversion to `databento::MboMsg`
-  - Order book updates via `Book::Apply()` (write lock)
-  - Push to ring buffer for JSON generation
+  - Order book updates via `Book::Apply()` (single-threaded, no lock)
+  - Capture `BookSnapshot` and push to ring buffer for JSON generation
 - **Worker thread 2**: `jsonGenerationThread_` (`std::jthread`) performs **ALL JSON generation**:
   - Pop from ring buffer (blocking, preserves order)
-  - Order book snapshot reads (shared lock)
+  - Serialize snapshot (no access to live book)
   - JSON string generation
   - Batching and flushing to file
   - **Net: 1 process, 2 worker threads doing all processing**
 
 **Synchronization Mechanisms:**
-- Order book lock: write-locked for `Apply`, read-locked for JSON snapshot reads. On macOS this uses `os_unfair_lock` guards; on other platforms it uses `std::shared_mutex`.
+- Live order book is updated only by the receiving thread during processing; no locks are required on `Apply` or snapshot capture.
+- JSON thread never touches the live book; it serializes from the immutable `BookSnapshot` only.
 - SPSC ring buffer between threads avoids locking; producer/consumer indices are cacheline-aligned and use `atomic::wait/notify` for efficient blocking.
 - Receiver network path uses a circular byte buffer (`std::array`, `std::span`) to avoid extra copies and eliminate `memmove`.
 
@@ -144,7 +145,7 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
 - **Guarantee**: Messages are processed in the exact order received from TCP
 
 **ReceivingThread → RingBuffer → JSONThread (Processing to JSON Generation):**
-- ReceivingThread pushes to RingBuffer using **blocking `push()`** (line 264: `jsonRingBuffer_->push(wrapper)`)
+- ReceivingThread pushes to RingBuffer using **blocking `push()`**
 - Blocking push means: if buffer is full, it **waits** rather than dropping (no data loss)
 - RingBuffer is **SPSC (Single Producer Single Consumer)** - only one producer (ReceivingThread) and one consumer (JSONThread)
 - SPSC queue with atomic operations guarantees **strict FIFO ordering** (FIFO = First In First Out)
@@ -179,7 +180,6 @@ This `src` module implements a high-performance, reproducible TCP sender/receive
 - Cacheline alignment for ring buffer indices to avoid false sharing.
 - JSON batching with size and interval thresholds to reduce syscalls; on macOS/Linux, JSON is written via a memory-mapped file with batched `msync(MS_ASYNC)`; on other platforms, a buffered `std::ofstream` append fallback is used.
 - Thread affinity on macOS Apple Silicon: worker threads are optionally pinned using `THREAD_AFFINITY_POLICY` via a small helper (`include/project/thread_affinity.hpp`). Calls are no-ops on non-macOS.
-- Order book locking on macOS uses `os_unfair_lock` RAII guards to reduce jitter; other platforms use `std::shared_mutex`.
 - Compiler flags `-O3 -DNDEBUG -march=native` and link-time optimization enabled.
 - C++20 features: `std::jthread`, `std::stop_token`, `std::atomic::wait/notify`, `std::format`, `std::span`, `std::ranges`, `constexpr` helpers, and concepts.
 
