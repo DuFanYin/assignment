@@ -259,8 +259,8 @@ This runs the pipeline: starts the sender in the background, then starts the rec
   - `include/project/thread_affinity.hpp`, `src/src/thread_affinity.cpp`
 - JSON writer (mmap on macOS/Linux, ofstream fallback elsewhere):
   - `include/project/json_writer.hpp`, `src/src/json_writer.cpp`
-- Order book lock wrappers (os_unfair_lock on macOS, shared_mutex elsewhere):
-  - `include/project/order_book.hpp` (RAII `WriteGuard`/`ReadGuard`)
+- Order book implementation:
+  - `include/project/order_book.hpp` (no runtime locks; single-threaded updates during processing)
 
 ## Metrics and Operational Notes
 

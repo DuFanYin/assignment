@@ -23,21 +23,7 @@
 
 namespace db = databento;
 
-// Portable lock wrappers using shared_mutex everywhere for simplicity.
-#include <shared_mutex>
-struct OrderBookLock {
-  mutable std::shared_mutex mtx;
-};
-struct WriteGuard {
-  explicit WriteGuard(OrderBookLock& l) : lk(l), ulk(l.mtx) {}
-  OrderBookLock& lk;
-  std::unique_lock<std::shared_mutex> ulk;
-};
-struct ReadGuard {
-  explicit ReadGuard(const OrderBookLock& l) : lk(l), slk(l.mtx) {}
-  const OrderBookLock& lk;
-  std::shared_lock<std::shared_mutex> slk;
-};
+// (No locking primitives needed here; the receiver thread is the sole writer during processing.)
 
 struct PriceLevel {
   int64_t price{db::kUndefPrice};

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <random>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -122,7 +123,11 @@ private:
     // Timing
     std::chrono::steady_clock::time_point startTime_;
     std::chrono::steady_clock::time_point endTime_;
-    std::vector<uint64_t> orderProcessTimesNs_;  // Per-order processing times
+    static constexpr size_t kTimingReservoirSize = 8192;
+    uint64_t totalProcessTimeNs_;
+    uint64_t timingSamples_;
+    std::minstd_rand rng_;
+    std::vector<uint64_t> timingReservoir_;
     
     // Methods
     bool setupConnection();

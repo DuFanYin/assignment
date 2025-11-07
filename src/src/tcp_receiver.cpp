@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <numeric>
+#include <random>
 #include <format>
 #include <ranges>
 #include <span>
@@ -19,9 +20,10 @@ TCPReceiver::TCPReceiver()
       jsonBatchSize_(1000), jsonFlushInterval_(100),
       clientSocket_(-1), connected_(false), receiving_(false), 
       receivedMessages_(0), processedOrders_(0), jsonOutputs_(0),
-      jsonRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(65536)) {
+      jsonRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(65536)),
+      totalProcessTimeNs_(0), timingSamples_(0), rng_(std::random_device{}()) {
     jsonBuffer_.reserve(jsonBatchSize_);
-    orderProcessTimesNs_.reserve(100000);
+    timingReservoir_.reserve(kTimingReservoirSize);
 }
 
 TCPReceiver::~TCPReceiver() {
@@ -274,7 +276,19 @@ void TCPReceiver::receivingLoop(std::stop_token stopToken) {
                         snap.asks.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
                     }
                     auto applyEnd = std::chrono::steady_clock::now();
-                    orderProcessTimesNs_.push_back((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(applyEnd - applyStart).count());
+                    const uint64_t elapsedNs = static_cast<uint64_t>(std::chrono::nanoseconds(applyEnd - applyStart).count());
+                    totalProcessTimeNs_ += elapsedNs;
+                    ++timingSamples_;
+                    if (timingReservoir_.size() < kTimingReservoirSize) {
+                        timingReservoir_.push_back(elapsedNs);
+                    } else {
+                        std::uniform_int_distribution<uint64_t> dist(0, timingSamples_ - 1);
+                        const uint64_t idx = dist(rng_);
+                        if (idx < kTimingReservoirSize) {
+                            timingReservoir_[static_cast<size_t>(idx)] = elapsedNs;
+                        }
+                    }
+                    processedOrders_++;
                     processedOrders_++;
 
                     // Push to ring buffer for JSON generation
@@ -422,20 +436,24 @@ double TCPReceiver::getThroughput() const {
 }
 
 double TCPReceiver::getAverageOrderProcessNs() const {
-    if (orderProcessTimesNs_.empty()) return 0.0;
-    uint64_t sumNs = std::accumulate(orderProcessTimesNs_.begin(), orderProcessTimesNs_.end(), uint64_t{0});
-    return static_cast<double>(sumNs) / static_cast<double>(orderProcessTimesNs_.size());
+    if (timingSamples_ == 0) return 0.0;
+    return static_cast<double>(totalProcessTimeNs_) / static_cast<double>(timingSamples_);
 }
 
 uint64_t TCPReceiver::getP99OrderProcessNs() const {
-    if (orderProcessTimesNs_.empty()) return 0;
-    std::vector<uint64_t> timesCopy = orderProcessTimesNs_;
-    size_t n = timesCopy.size();
-    size_t idx = (n * 99 + 99) / 100; // ceil(0.99 * n)
+    if (timingReservoir_.empty()) return 0;
+    const size_t sampleCount = static_cast<size_t>(std::min<uint64_t>(timingSamples_, timingReservoir_.size()));
+    if (sampleCount == 0) return 0;
+    std::vector<uint64_t> samples;
+    samples.reserve(sampleCount);
+    for (size_t i = 0; i < sampleCount; ++i) {
+        samples.push_back(timingReservoir_[i]);
+    }
+    size_t idx = (sampleCount * 99 + 99) / 100; // ceil(0.99 * n)
     if (idx == 0) idx = 1;
-    if (idx > n) idx = n;
-    std::nth_element(timesCopy.begin(), timesCopy.begin() + (idx - 1), timesCopy.end());
-    return timesCopy[idx - 1];
+    if (idx > sampleCount) idx = sampleCount;
+    std::nth_element(samples.begin(), samples.begin() + (idx - 1), samples.end());
+    return samples[idx - 1];
 }
 
 void TCPReceiver::cleanup() {
