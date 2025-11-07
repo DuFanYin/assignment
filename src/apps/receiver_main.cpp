@@ -3,9 +3,12 @@
 #include <chrono>
 #include <iomanip>
 #include <thread>
+#include <cmath>
 #include "project/tcp_receiver.hpp"
 #include "project/utils.hpp"
 #include "project/config.hpp"
+#include <databento/constants.hpp>
+#include <databento/pretty.hpp>
 #include <cstdlib>
 
 int main() {
@@ -90,11 +93,33 @@ int main() {
         std::cout << "  Bid Price Levels: " << orderBook->GetBidLevelCount() << std::endl;
         std::cout << "  Ask Price Levels: " << orderBook->GetAskLevelCount() << std::endl;
         auto finalBbo = orderBook->Bbo();
-        auto finalBid = finalBbo.second;   // first = bid
-        auto finalAsk = finalBbo.first;  // second = ask
-        std::cout << "  Best Bid: " << databento::pretty::Px{finalBid.price} << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
-        std::cout << "  Best Ask: " << databento::pretty::Px{finalAsk.price} << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
-        std::cout << "  Bid-Ask Spread: " << (finalAsk.price - finalBid.price) << std::endl;
+        auto finalBid = finalBbo.first;   // first = bid
+        auto finalAsk = finalBbo.second;  // second = ask
+        
+        // Format prices to 2 decimal places (standard for financial data)
+        std::cout << std::fixed << std::setprecision(2);
+        if (finalBid.price != databento::kUndefPrice && finalAsk.price != databento::kUndefPrice) {
+            // Prices are in nanodollars (10^9), convert to dollars
+            double bidValue = static_cast<double>(finalBid.price) / 1000000000.0;
+            double askValue = static_cast<double>(finalAsk.price) / 1000000000.0;
+            double spreadValue = std::abs(askValue - bidValue);
+            
+            std::cout << "  Best Bid: " << bidValue << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
+            std::cout << "  Best Ask: " << askValue << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
+            std::cout << "  Bid-Ask Spread: " << spreadValue << std::endl;
+        } else {
+            std::string bidStr = (finalBid.price != databento::kUndefPrice) 
+                ? databento::pretty::PxToString(finalBid.price) 
+                : "N/A";
+            std::string askStr = (finalAsk.price != databento::kUndefPrice) 
+                ? databento::pretty::PxToString(finalAsk.price) 
+                : "N/A";
+            std::cout << "  Best Bid: " << bidStr << " @ " << finalBid.size << " (" << finalBid.count << " orders)" << std::endl;
+            std::cout << "  Best Ask: " << askStr << " @ " << finalAsk.size << " (" << finalAsk.count << " orders)" << std::endl;
+            std::cout << "  Bid-Ask Spread: N/A" << std::endl;
+        }
+        std::cout.unsetf(std::ios_base::fixed);
+        std::cout.precision(6); // Reset to default
     }
     std::cout << "=====================================" << std::endl;
 

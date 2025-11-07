@@ -1,6 +1,6 @@
 import databento as db
 
-path = "src/data/CLX5_mbo.dbn"
+path = "../src/data/CLX5_mbo.dbn"
 
 store = db.DBNStore.from_file(path)
 
