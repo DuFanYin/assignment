@@ -144,6 +144,9 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
         return;
     }
     
+    // Start timing - includes file loading time
+    startTime_ = std::chrono::steady_clock::now();
+    
     // Load and pre-parse the entire DBN file
     std::unique_ptr<databento::DbnFileStore> store;
     try {
@@ -167,8 +170,6 @@ void TCPSender::streamingLoop(std::stop_token stopToken) {
     // Batch I/O with writev
     std::vector<MboMessage> batchBuffer;
     batchBuffer.reserve(batchSize_);
-    // Start streaming messages - timing starts here
-    startTime_ = std::chrono::steady_clock::now();
     
     try {
         for (size_t i = 0; i < allMessages.size() && streaming_; ++i) {

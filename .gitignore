@@ -41,6 +41,7 @@ databento-cpp
 *.app
 MarketDataProcessor
 inspect_data
+server/thirdparty/
 
 # CMake
 CMakeCache.txt
@@ -113,7 +114,5 @@ gmon.out
 *.drd
 
 # Core dumps
-core
-core.*
 src/data/order_book_output.json
 *.json

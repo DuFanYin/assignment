@@ -71,7 +71,7 @@ if [ ! -f "./apps/receiver" ] || [ ! -f "./apps/sender" ]; then
 fi
 
 # Clean up existing JSON output file if it exists
-rm -f "../data/order_book_output.json" 2>/dev/null
+rm -f "../../data/order_book_output.json" 2>/dev/null
 
 # Kill any existing processes on port 8080
 lsof -ti:8080 | xargs kill -9 2>/dev/null
@@ -102,11 +102,11 @@ kill $SENDER_PID 2>/dev/null
 wait $SENDER_PID 2>/dev/null
 
 # Check if output file was created
-if [ -f "../data/order_book_output.json" ]; then
-    FILE_SIZE=$(du -h ../data/order_book_output.json | cut -f1)
-    RECORD_COUNT=$(wc -l < ../data/order_book_output.json)
+if [ -f "../../data/order_book_output.json" ]; then
+    FILE_SIZE=$(du -h ../../data/order_book_output.json | cut -f1)
+    RECORD_COUNT=$(wc -l < ../../data/order_book_output.json)
     echo ""
-    echo "Output: ../data/order_book_output.json ($FILE_SIZE, $RECORD_COUNT records)"
+    echo "Output: ../../data/order_book_output.json ($FILE_SIZE, $RECORD_COUNT records)"
 fi
 
 exit $RECEIVER_EXIT

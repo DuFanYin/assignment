@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBN File Upload & Processing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: border-color 0.3s;
+        }
+        .upload-area.dragover {
+            border-color: #4CAF50;
+            background-color: #f0f8f0;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .file-label:hover {
+            background-color: #45a049;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status.info {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            display: block;
+        }
+        .status.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            display: block;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+            display: block;
+        }
+        .progress {
+            margin-top: 20px;
+            width: 100%;
+            height: 30px;
+            background-color: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .stats {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            display: none;
+        }
+        .stats.show {
+            display: block;
+        }
+        .stat-item {
+            margin: 8px 0;
+            font-size: 14px;
+        }
+        button {
+            padding: 12px 24px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #1976d2;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #fileName {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DBN File Upload & Processing</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>Drag and drop your .dbn file here or click to browse</p>
+            <label for="fileInput" class="file-label">Choose File</label>
+            <input type="file" id="fileInput" accept=".dbn">
+            <div id="fileName"></div>
+        </div>
+        
+        <div class="status" id="status"></div>
+        
+        <div class="progress" id="progress">
+            <div class="progress-bar" id="progressBar">0%</div>
+        </div>
+        
+        <button id="uploadBtn" disabled>Upload & Process</button>
+        <button id="stopBtn" disabled>Stop Processing</button>
+        
+        <div class="stats" id="stats">
+            <h3>Processing Statistics</h3>
+            <div class="stat-item">Status: <span id="statStatus">-</span></div>
+            <div class="stat-item">Bytes Uploaded: <span id="statBytes">0</span></div>
+            <div class="stat-item">Messages Processed: <span id="statMessages">0</span></div>
+            <div class="stat-item">Connection: <span id="statConnection">Disconnected</span></div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progressBar');
+        const fileName = document.getElementById('fileName');
+        const stats = document.getElementById('stats');
+        
+        let ws = null;
+        let file = null;
+        let chunkSize = 64 * 1024; // 64KB chunks
+        let currentOffset = 0;
+        let totalBytes = 0;
+        let messagesProcessed = 0;
+        
+        // WebSocket server URL
+        const wsUrl = `ws://${window.location.hostname}:9001`;
+        
+        // File selection
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                file = e.target.files[0];
+                fileName.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+                uploadBtn.disabled = false;
+                showStatus('File selected. Click "Upload & Process" to start.', 'info');
+            }
+        });
+        
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                file = e.dataTransfer.files[0];
+                fileName.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+                uploadBtn.disabled = false;
+                showStatus('File selected. Click "Upload & Process" to start.', 'info');
+            }
+        });
+        
+        // Upload button
+        uploadBtn.addEventListener('click', () => {
+            if (!file) return;
+            startUpload();
+        });
+        
+        // Stop button
+        stopBtn.addEventListener('click', () => {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            showStatus('Processing stopped.', 'info');
+            resetUI();
+        });
+        
+        function startUpload() {
+            if (!file) return;
+            
+            // Reset state
+            currentOffset = 0;
+            totalBytes = 0;
+            messagesProcessed = 0;
+            
+            // Connect WebSocket
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                showStatus('Connected to server. Starting upload...', 'info');
+                stats.classList.add('show');
+                document.getElementById('statConnection').textContent = 'Connected';
+                uploadBtn.disabled = true;
+                stopBtn.disabled = false;
+                progress.style.display = 'block';
+                
+                // Send file metadata first
+                const metadata = {
+                    type: 'metadata',
+                    fileName: file.name,
+                    fileSize: file.size
+                };
+                ws.send(JSON.stringify(metadata));
+                
+                // Start sending chunks
+                sendNextChunk();
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'progress') {
+                        updateProgress(message.bytesReceived, file.size);
+                        document.getElementById('statBytes').textContent = formatBytes(message.bytesReceived);
+                    } else if (message.type === 'info') {
+                        showStatus(message.message || 'Info', 'info');
+                    } else if (message.type === 'stats') {
+                        messagesProcessed = message.messagesProcessed || 0;
+                        document.getElementById('statMessages').textContent = messagesProcessed.toLocaleString();
+                        document.getElementById('statStatus').textContent = message.status || 'Processing';
+                    } else if (message.type === 'complete') {
+                        showStatus('File processing completed successfully!', 'success');
+                        document.getElementById('statStatus').textContent = 'Complete';
+                        document.getElementById('statMessages').textContent = (message.messagesProcessed || 0).toLocaleString();
+                        
+                        // Display detailed statistics (same as receiver version)
+                        displayStatistics(message);
+                        resetUI();
+                    } else if (message.type === 'error') {
+                        showStatus('Error: ' + (message.error || 'Unknown error'), 'error');
+                        resetUI();
+                    }
+                } catch (e) {
+                    console.error('Error parsing message:', e);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                showStatus('WebSocket error occurred.', 'error');
+                resetUI();
+            };
+            
+            ws.onclose = () => {
+                const statConnection = document.getElementById('statConnection');
+                if (statConnection) {
+                    statConnection.textContent = 'Disconnected';
+                }
+                if (currentOffset < file.size) {
+                    showStatus('Connection closed unexpectedly.', 'error');
+                }
+                resetUI();
+            };
+        }
+        
+        function sendNextChunk() {
+            if (!ws || ws.readyState !== WebSocket.OPEN || currentOffset >= file.size) {
+                return;
+            }
+            
+            const reader = new FileReader();
+            const end = Math.min(currentOffset + chunkSize, file.size);
+            const chunk = file.slice(currentOffset, end);
+            
+            reader.onload = (e) => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    // Send binary chunk
+                    ws.send(e.target.result);
+                    currentOffset = end;
+                    
+                    if (currentOffset < file.size) {
+                        // Send next chunk after a small delay to avoid overwhelming
+                        setTimeout(sendNextChunk, 10);
+                    } else {
+                        // Send completion signal
+                        const complete = { type: 'complete' };
+                        ws.send(JSON.stringify(complete));
+                    }
+                }
+            };
+            
+            reader.readAsArrayBuffer(chunk);
+        }
+        
+        function updateProgress(bytesReceived, total) {
+            const percent = Math.min(100, (bytesReceived / total) * 100);
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent.toFixed(1) + '%';
+        }
+        
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = 'status ' + type;
+        }
+        
+        function resetUI() {
+            uploadBtn.disabled = false;
+            stopBtn.disabled = true;
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+        
+        function displayStatistics(message) {
+            // Create detailed statistics display (same format as receiver version)
+            let statsHTML = '<div style="margin-top: 20px; padding: 20px; background: #f9f9f9; border-radius: 8px;">';
+            statsHTML += '<h3 style="margin-top: 0;">Processing Statistics</h3>';
+            
+            statsHTML += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">';
+            statsHTML += `<div><strong>Messages Received:</strong> ${(message.messagesReceived || 0).toLocaleString()}</div>`;
+            statsHTML += `<div><strong>Orders Processed:</strong> ${(message.ordersProcessed || 0).toLocaleString()}</div>`;
+            
+            // Add download button for JSON output
+            if (message.sessionId) {
+                statsHTML += `<div style="margin-top: 20px;">
+                    <button onclick="downloadJSON('${message.sessionId}')" style="padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
+                        📥 Download JSON Output
+                    </button>
+                </div>`;
+            }
+            if (message.messageThroughput) {
+                statsHTML += `<div><strong>Message Throughput:</strong> ${message.messageThroughput.toFixed(0)} messages/sec</div>`;
+            }
+            if (message.averageOrderProcessNs) {
+                statsHTML += `<div><strong>Avg Order Process Time:</strong> ${message.averageOrderProcessNs.toFixed(0)} ns</div>`;
+            }
+            if (message.p99OrderProcessNs) {
+                statsHTML += `<div><strong>P99 Order Process Time:</strong> ${message.p99OrderProcessNs} ns</div>`;
+            }
+            if (message.orderProcessingRate) {
+                statsHTML += `<div><strong>Order Processing Rate:</strong> ${message.orderProcessingRate.toFixed(0)} orders/sec</div>`;
+            }
+            statsHTML += '</div>';
+            
+            // Order book summary
+            if (message.activeOrders !== undefined) {
+                statsHTML += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">';
+                statsHTML += '<h4 style="margin-top: 0;">Final Order Book Summary</h4>';
+                statsHTML += `<div><strong>Active Orders:</strong> ${message.activeOrders}</div>`;
+                statsHTML += `<div><strong>Bid Price Levels:</strong> ${message.bidPriceLevels}</div>`;
+                statsHTML += `<div><strong>Ask Price Levels:</strong> ${message.askPriceLevels}</div>`;
+                
+                if (message.bestBid !== undefined && message.bestAsk !== undefined) {
+                    statsHTML += `<div><strong>Best Bid:</strong> ${message.bestBid.toFixed(2)} @ ${message.bestBidSize} (${message.bestBidCount} orders)</div>`;
+                    statsHTML += `<div><strong>Best Ask:</strong> ${message.bestAsk.toFixed(2)} @ ${message.bestAskSize} (${message.bestAskCount} orders)</div>`;
+                    statsHTML += `<div><strong>Bid-Ask Spread:</strong> ${message.bidAskSpread.toFixed(2)}</div>`;
+                }
+                statsHTML += '</div>';
+            }
+            
+            statsHTML += '</div>';
+            
+            // Insert statistics into the stats div
+            const statsDiv = document.getElementById('stats');
+            statsDiv.innerHTML = statsHTML;
+            statsDiv.classList.add('show');
+        }
+        
+        function downloadJSON(sessionId) {
+            if (sessionId) {
+                window.location.href = '/download/json?session_id=' + encodeURIComponent(sessionId);
+            } else {
+                window.location.href = '/download/json';
+            }
+        }
+    </script>
+</body>
+</html>
+
