@@ -6,6 +6,9 @@ test/build/
 databento-cpp/build/
 
 databento-cpp
+.clangd
+.cursorignore
+.cursor
 
 # Compiled Object files
 *.slo
