@@ -1,16 +1,20 @@
 #!/bin/bash
 
 # WebSocket Server - Build and Run Script
-# Usage: ./start.sh [build|run]
-#   build: Build databento-cpp, uWebSockets/uSockets, and the project
-#   run:   Run the WebSocket server (default, assumes build already exists)
+# Usage: ./start.sh [build|run|clean|build_clean]
+#   build:       Build databento-cpp, uWebSockets/uSockets, and the project
+#   run:         Run the WebSocket server (default, assumes build already exists)
+#   clean:       Wipe the database (drop and recreate all tables)
+#   build_clean: Build project then clean database
 
 MODE=${1:-run}
 
-if [[ "$MODE" != "build" && "$MODE" != "run" ]]; then
-    echo "Usage: $0 [build|run]"
-    echo "  build: Build databento-cpp, uWebSockets/uSockets, and the project"
-    echo "  run:   Run the WebSocket server (default, assumes build already exists)"
+if [[ "$MODE" != "build" && "$MODE" != "run" && "$MODE" != "clean" && "$MODE" != "build_clean" ]]; then
+    echo "Usage: $0 [build|run|clean|build_clean]"
+    echo "  build:       Build databento-cpp, uWebSockets/uSockets, and the project"
+    echo "  run:         Run the WebSocket server (default, assumes build already exists)"
+    echo "  clean:       Wipe the database (drop and recreate all tables)"
+    echo "  build_clean: Build project then clean database"
     exit 1
 fi
 
@@ -175,6 +179,115 @@ if [[ "$MODE" == "build" ]]; then
     exit 0
 fi
 
+# CLEAN MODE: Wipe the database
+if [[ "$MODE" == "clean" ]]; then
+    echo "=========================================="
+    echo "WebSocket Server - Clean Database"
+    echo "=========================================="
+    echo ""
+    
+    # Read database config from config.ini
+    CONFIG_FILE="config/config.ini"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "✗ Config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    
+    # Parse config.ini to get database settings
+    DB_HOST=$(grep "^postgres.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
+    DB_PORT=$(grep "^postgres.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "5432")
+    DB_NAME=$(grep "^postgres.dbname=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
+    DB_USER=$(grep "^postgres.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
+    DB_PASSWORD=$(grep "^postgres.password=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
+    
+    # Export password for psql
+    export PGPASSWORD="$DB_PASSWORD"
+    
+    echo "Database: $DB_NAME"
+    echo "Host: $DB_HOST"
+    echo "Port: $DB_PORT"
+    echo "User: $DB_USER"
+    echo ""
+    
+    # Check if PostgreSQL is running
+    if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" > /dev/null 2>&1; then
+        echo "✗ PostgreSQL is not running or not accessible"
+        echo "  Please ensure PostgreSQL is running and accessible at $DB_HOST:$DB_PORT"
+        exit 1
+    fi
+    echo "✓ PostgreSQL is running"
+    
+    # Check if database exists
+    DB_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
+    if [ "$DB_EXISTS" -eq 0 ]; then
+        echo "✓ Database '$DB_NAME' does not exist (nothing to clean)"
+        exit 0
+    fi
+    
+    echo ""
+    echo "Wiping database..."
+    
+    # Drop all tables
+    echo "  Dropping tables..."
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" << EOF > /dev/null 2>&1
+DROP TABLE IF EXISTS ask_levels CASCADE;
+DROP TABLE IF EXISTS bid_levels CASCADE;
+DROP TABLE IF EXISTS order_book_snapshots CASCADE;
+DROP TABLE IF EXISTS processing_sessions CASCADE;
+EOF
+    
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to drop tables"
+        exit 1
+    fi
+    echo "✓ Tables dropped"
+    
+    # Recreate schema
+    SCHEMA_FILE="db/schema/schema.sql"
+    if [ ! -f "$SCHEMA_FILE" ]; then
+        echo "✗ Schema file not found: $SCHEMA_FILE"
+        exit 1
+    fi
+    
+    echo "  Recreating schema..."
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$SCHEMA_FILE" > /dev/null 2>&1
+    
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to recreate schema"
+        exit 1
+    fi
+    echo "✓ Schema recreated"
+    
+    echo ""
+    echo "=========================================="
+    echo "✓ Database cleaned successfully"
+    echo "=========================================="
+    exit 0
+fi
+
+# BUILD_CLEAN MODE: Build then clean database
+if [[ "$MODE" == "build_clean" ]]; then
+    echo "=========================================="
+    echo "WebSocket Server - Build + Clean"
+    echo "=========================================="
+    echo ""
+    
+    # First run build
+    "$0" build
+    if [ $? -ne 0 ]; then
+        echo "✗ Build failed, skipping clean"
+        exit 1
+    fi
+    
+    echo ""
+    echo "Build complete, now cleaning database..."
+    echo ""
+    
+    # Then run clean
+    "$0" clean
+    exit $?
+fi
+
 # RUN MODE: Run the WebSocket server
 cd build
 
@@ -185,22 +298,78 @@ if [ ! -f "./apps/websocket_server" ]; then
     exit 1
 fi
 
-# Clean up existing JSON output file if it exists
-rm -f "../../data/order_book_output.json" 2>/dev/null
-
-# Kill any existing processes on port 9001 (WebSocket port)
-lsof -ti:9001 | xargs kill -9 2>/dev/null
-sleep 1
-
 # Set config path
 export ASSIGNMENT_CONFIG="../config/config.ini"
 
+# Database setup: Check and create database/tables if needed
 echo "=========================================="
-echo "Starting WebSocket Server"
+echo "Database Setup"
 echo "=========================================="
-echo "WebSocket port: 9001"
-echo "HTTP server: http://localhost:9001"
+
+# Read database config from config.ini
+CONFIG_FILE="../config/config.ini"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "✗ Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+# Parse config.ini to get database settings
+DB_HOST=$(grep "^postgres.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
+DB_PORT=$(grep "^postgres.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "5432")
+DB_NAME=$(grep "^postgres.dbname=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
+DB_USER=$(grep "^postgres.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
+DB_PASSWORD=$(grep "^postgres.password=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
+
+# Export password for psql
+export PGPASSWORD="$DB_PASSWORD"
+
+# Check if PostgreSQL is running
+if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" > /dev/null 2>&1; then
+    echo "✗ PostgreSQL not accessible at $DB_HOST:$DB_PORT"
+    exit 1
+fi
+
+# Check if database exists, create if not
+DB_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
+if [ "$DB_EXISTS" -eq 0 ]; then
+    echo "Creating database '$DB_NAME'..."
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;" > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to create database"
+        exit 1
+    fi
+fi
+
+# Check if tables exist, create if not
+SCHEMA_FILE="../db/schema/schema.sql"
+if [ ! -f "$SCHEMA_FILE" ]; then
+    echo "✗ Schema file not found: $SCHEMA_FILE"
+    exit 1
+fi
+
+TABLE_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'processing_sessions');")
+if [ "$TABLE_EXISTS" != "t" ]; then
+    echo "Creating schema..."
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$SCHEMA_FILE" > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to create schema"
+        exit 1
+    fi
+fi
+
+echo "✓ Database ready: $DB_NAME @ $DB_HOST:$DB_PORT"
+echo ""
+
+# Kill any existing processes on port 9001
+lsof -ti:9001 | xargs kill -9 2>/dev/null
+sleep 1
+
+echo "=========================================="
+echo "Starting Server"
+echo "=========================================="
+echo "HTTP: http://localhost:9001"
 echo "Press Ctrl+C to stop"
+echo "=========================================="
 echo ""
 
 # Run the WebSocket server

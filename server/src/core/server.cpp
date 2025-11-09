@@ -32,7 +32,7 @@ WebSocketServer::WebSocketServer(int port, const PostgresConnection::Config& dbC
     , messagesProcessed_(0)
     , bytesReceived_(0)
     , orderBook_(std::make_unique<Book>())
-    , jsonRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(ringBufferSize))
+    , snapshotRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(ringBufferSize))
     , symbol_("")  // Will be extracted from DBN file
     , topLevels_(topLevels)
     , outputFullBook_(outputFullBook)
@@ -64,7 +64,6 @@ bool WebSocketServer::start() {
     try {
         dbWriter_ = std::make_unique<project::DatabaseWriter>(dbConfig_);
         jsonGenerator_ = std::make_unique<project::JSONGenerator>(dbConfig_);
-        std::cout << "Database writer initialized" << std::endl;
     } catch (const std::exception& e) {
         utils::logError("Failed to initialize database writer: " + std::string(e.what()));
         return false;
@@ -72,12 +71,10 @@ bool WebSocketServer::start() {
     
     // Set running_ to true BEFORE starting the thread to avoid race condition
     running_ = true;
-    std::cout << "Server started, running_ = true" << std::endl;
     
-    // Start database writer thread
-    std::cout << "Starting database writer thread..." << std::endl;
-    dbWriterThread_ = std::thread([this]() {
-        this->databaseWriterLoop();
+    // Start database writer thread (jthread with stop token)
+    dbWriterThread_ = std::jthread([this](std::stop_token st) {
+        this->databaseWriterLoop(st);
     });
     
     // Give the thread a moment to start
@@ -159,7 +156,8 @@ bool WebSocketServer::start() {
                             // Process in a separate thread to avoid blocking
                             std::string tempPath = data->tempFilePath;
                             std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                            std::thread([this, tempPath, sendMsg]() {
+                            
+                            std::jthread([this, tempPath, sendMsg](std::stop_token) {
                                 PerSocketData tempData;
                                 tempData.tempFilePath = tempPath;
                                 processDbnChunk({}, &tempData, sendMsg);
@@ -215,7 +213,8 @@ bool WebSocketServer::start() {
                     // Process the complete DBN file in a separate thread
                     std::string tempPath = data->tempFilePath;
                     std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                    std::thread([this, tempPath, sendMsg]() {
+                    
+                    std::jthread([this, tempPath, sendMsg](std::stop_token) {
                         PerSocketData tempData;
                         tempData.tempFilePath = tempPath;
                         processDbnChunk({}, &tempData, sendMsg);
@@ -228,14 +227,15 @@ bool WebSocketServer::start() {
             
             // Process any remaining data if not already processing
             if (!data->processingStarted && !data->tempFilePath.empty() && std::filesystem::exists(data->tempFilePath)) {
-                data->processingStarted = true;
-                std::string tempPath = data->tempFilePath;
-                std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                std::thread([this, tempPath, sendMsg]() {
-                    PerSocketData tempData;
-                    tempData.tempFilePath = tempPath;
-                    processDbnChunk({}, &tempData, sendMsg);
-                }).detach();
+                    data->processingStarted = true;
+                    std::string tempPath = data->tempFilePath;
+                    std::function<void(const std::string&)> sendMsg = data->sendMessage;
+                    
+                std::jthread([this, tempPath, sendMsg](std::stop_token) {
+                        PerSocketData tempData;
+                        tempData.tempFilePath = tempPath;
+                        processDbnChunk({}, &tempData, sendMsg);
+                    }).detach();
             }
             
             // Clean up temp file after a delay (to allow processing to complete)
@@ -246,6 +246,36 @@ bool WebSocketServer::start() {
                 }).detach();
             }
         }
+    }).get("/status/:session_id", [this](auto *res, auto *req) {
+        // Check if session is complete
+        res->writeHeader("Content-Type", "application/json");
+        res->writeHeader("Access-Control-Allow-Origin", "*");
+        
+        std::string sessionId = std::string(req->getParameter(0));
+        
+        if (sessionId.empty() || !jsonGenerator_) {
+            res->writeStatus("400 Bad Request");
+            res->end("{\"error\":\"Invalid session ID\"}");
+            return;
+        }
+        
+        // Query database for session status
+        std::string sql = "SELECT status FROM processing_sessions WHERE session_id = '" + sessionId + "'";
+        auto result = jsonGenerator_->getConnection().execute(sql);
+        
+        nlohmann::json response;
+        if (result.success && !result.rows.empty()) {
+            std::string status = result.rows[0][0];
+            response["sessionId"] = sessionId;
+            response["status"] = status;
+            response["complete"] = (status == "completed");
+        } else {
+            response["error"] = "Session not found";
+            response["complete"] = false;
+        }
+        
+        res->writeStatus("200 OK");
+        res->end(response.dump());
     }).get("/download/json", [this](auto *res, auto *req) {
         // Generate JSON from database on-demand
         res->writeStatus("200 OK");
@@ -289,10 +319,7 @@ bool WebSocketServer::start() {
             res->end("File not found");
         }
     }).listen(port_, [this](auto *listen_socket) {
-        if (listen_socket) {
-            std::cout << "WebSocket server listening on port " << port_ << std::endl;
-            std::cout << "HTTP server available at http://localhost:" << port_ << std::endl;
-        } else {
+        if (!listen_socket) {
             std::cerr << "Failed to listen on port " << port_ << std::endl;
             running_ = false;
         }
@@ -309,7 +336,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
     
     try {
         // Use DbnFileStore to read the temporary file
-        std::cout << "Starting to process DBN file: " << socketData->tempFilePath << std::endl;
         db::DbnFileStore store(socketData->tempFilePath);
         
         // Extract symbol from DBN file metadata
@@ -317,18 +343,24 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
         if (!metadata.symbols.empty()) {
             symbol_ = metadata.symbols[0];  // Use first symbol from the file
             orderBook_->setSymbol(symbol_);
-            
-            std::cout << "Extracted symbol from DBN file: " << symbol_ << std::endl;
-            
-            if (sendMessage) {
-                nlohmann::json info;
-                info["type"] = "info";
-                info["message"] = "Extracted symbol from DBN file: " + symbol_;
-                sendMessage(info.dump());
-            }
+            std::cout << "Processing " << symbol_ << "..." << std::endl;
         } else {
             utils::logWarning("No symbols found in DBN file metadata");
-            std::cerr << "WARNING: No symbols found in DBN file metadata" << std::endl;
+        }
+        
+        // Start database session before processing
+        if (dbWriter_ && !symbol_.empty()) {
+            // Extract file name from temp file path
+            std::filesystem::path filePath(socketData->tempFilePath);
+            std::string fileName = filePath.filename().string();
+            size_t fileSize = std::filesystem::file_size(socketData->tempFilePath);
+            
+            try {
+                dbWriter_->startSession(symbol_, fileName, fileSize);
+                currentSessionId_ = dbWriter_->getCurrentSessionId();  // Cache it - never touch dbWriter_ again from this thread
+            } catch (const std::exception& e) {
+                utils::logError("Failed to start database session: " + std::string(e.what()));
+            }
         }
         
         // Start timing when processing begins (from pressing start button)
@@ -340,8 +372,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
         totalProcessTimeNs_ = 0;
         timingSamples_ = 0;
         timingReservoir_.clear();
-        
-        std::cout << "Starting to process records..." << std::endl;
         
         // Process all records
         const db::Record* record;
@@ -413,14 +443,9 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                     }
                     processedOrders_++;
                     
-                    // Push to ring buffer for JSON generation
+                    // Push snapshot to ring buffer for database writing
                     MboMessageWrapper wrapper(snap);
-                    jsonRingBuffer_->push(wrapper);
-                    
-                    // Debug: log every 1000 messages
-                    if (messagesProcessed_ % 1000 == 0) {
-                        std::cout << "Pushed " << messagesProcessed_ << " messages to ring buffer" << std::endl;
-                    }
+                    snapshotRingBuffer_->push(wrapper);
                     
                     messagesProcessed_++;
                     
@@ -447,41 +472,42 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             }
         }
         
-        std::cout << "Finished processing records. Total messages: " << messagesProcessed_ << std::endl;
-        std::cout << "Database writes continue in background..." << std::endl;
+        std::cout << "Processed " << messagesProcessed_.load() << " messages" << std::endl;
         
         // End timing when processing completes
         endTime_ = std::chrono::steady_clock::now();
         
-        // Update session statistics in database
-        if (dbWriter_) {
-            double throughput = getThroughput();
-            double avgNs = getAverageOrderProcessNs();
-            uint64_t p99Ns = getP99OrderProcessNs();
+        // Capture stats for DB thread to write (do this BEFORE setting running_ = false)
+        sessionStats_.messagesReceived = receivedMessages_.load();
+        sessionStats_.ordersProcessed = processedOrders_.load();
+        sessionStats_.throughput = getThroughput();
+        sessionStats_.avgProcessNs = static_cast<int64_t>(getAverageOrderProcessNs());
+        sessionStats_.p99ProcessNs = getP99OrderProcessNs();
             
-            dbWriter_->updateSessionStats(
-                receivedMessages_.load(),
-                processedOrders_.load(),
-                throughput,
-                static_cast<int64_t>(avgNs),
-                p99Ns
-            );
+        // Memory fence: ensure all sessionStats_ writes are visible before setting running_ = false
+        std::atomic_thread_fence(std::memory_order_release);
+        
+        // Signal that processing is complete - DB thread will exit when buffer is empty
+        running_.store(false, std::memory_order_release);
+        
+        // WAIT for DB writes to complete before sending completion message
+        if (dbWriterThread_.joinable()) {
+            dbWriterThread_.join();
         }
         
-        // Send completion message with statistics (same format as receiver version)
+        // Send completion message - everything is done including DB writes
+        // JSON generation happens on-demand when user clicks download
         if (sendMessage) {
-            
             nlohmann::json complete;
             complete["type"] = "complete";
             complete["messagesReceived"] = receivedMessages_.load();
             complete["ordersProcessed"] = processedOrders_.load();
             complete["messagesProcessed"] = messagesProcessed_.load();
             complete["bytesReceived"] = bytesReceived_.load();
-            if (dbWriter_) {
-                complete["sessionId"] = dbWriter_->getCurrentSessionId();
-            }
+            complete["dbWritesPending"] = snapshotRingBuffer_->size();
+            complete["sessionId"] = currentSessionId_;  // Use cached value - don't touch dbWriter_
             
-            // Calculate throughput (same as receiver version)
+            // Calculate throughput
             double throughput = getThroughput();
             complete["messageThroughput"] = throughput;
             
@@ -520,40 +546,35 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                 }
             }
             
+            std::cout << "Session complete: " << currentSessionId_ << std::endl;
             sendMessage(complete.dump());
         }
         
-        // Update final book state in database
-        if (orderBook_ && dbWriter_) {
+        // Capture final book state for DB thread to write
+        if (orderBook_) {
             auto finalBbo = orderBook_->Bbo();
             auto finalBid = finalBbo.first;
             auto finalAsk = finalBbo.second;
             
             if (finalBid.price != db::kUndefPrice && finalAsk.price != db::kUndefPrice) {
-                double bidValue = static_cast<double>(finalBid.price) / 1000000000.0;
-                double askValue = static_cast<double>(finalAsk.price) / 1000000000.0;
-                double spreadValue = std::abs(askValue - bidValue);
+                sessionStats_.totalOrders = orderBook_->GetOrderCount();
+                sessionStats_.bidLevels = orderBook_->GetBidLevelCount();
+                sessionStats_.askLevels = orderBook_->GetAskLevelCount();
+                sessionStats_.bestBid = static_cast<double>(finalBid.price) / 1000000000.0;
+                sessionStats_.bestAsk = static_cast<double>(finalAsk.price) / 1000000000.0;
+                sessionStats_.spread = std::abs(sessionStats_.bestAsk - sessionStats_.bestBid);
+                sessionStats_.hasBookState = true;
                 
-                dbWriter_->updateFinalBookState(
-                    orderBook_->GetOrderCount(),
-                    orderBook_->GetBidLevelCount(),
-                    orderBook_->GetAskLevelCount(),
-                    bidValue,
-                    askValue,
-                    spreadValue
-                );
+                // Memory fence: ensure all writes are visible
+                std::atomic_thread_fence(std::memory_order_release);
             }
         }
         
-        // End database session
-        if (dbWriter_) {
-            dbWriter_->endSession(true);
-        }
+        // Note: DB thread will write stats and end session when it finishes
         
         // Clean up order book after processing completes
         if (orderBook_) {
             orderBook_->Clear();
-            std::cout << "Order book cleared after processing" << std::endl;
         }
         
         
@@ -575,40 +596,90 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
     }
 }
 
-void WebSocketServer::processDbnRecord(const uint8_t* /*data*/, size_t /*size*/) {
-    // Not used - processing is done in processDbnChunk
-}
-
-void WebSocketServer::databaseWriterLoop() {
+void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
+    // Drop indexes for faster bulk loading
+    if (dbWriter_) {
+        dbWriter_->dropIndexes();
+    }
+    
+    size_t itemsWritten = 0;
+    constexpr size_t kBatchSize = 5000;  // Larger batches for COPY command
+    std::vector<MboMessageWrapper> batch;
+    batch.reserve(kBatchSize);
+    
+    auto writeBatch = [&]() {
+        if (batch.empty()) return;
+        
+        if (dbWriter_ && dbWriter_->writeBatch(batch)) {
+                itemsWritten += batch.size();
+        }
+        batch.clear();
+    };
+    
     MboMessageWrapper wrapper;
     
-    std::cout << "Database writer thread started" << std::endl;
-    
-    // Continue processing until stopped AND ring buffer is empty
-    while (running_.load() || !jsonRingBuffer_->empty()) {
-        if (jsonRingBuffer_->try_pop(wrapper)) {
-            // Successfully popped an item
-            try {
-                // Check if database writer is available
-                if (!dbWriter_) {
-                    utils::logError("Database writer is null!");
-                    continue;
-                }
-                
-                // Write snapshot to database
-                if (!dbWriter_->writeSnapshot(wrapper.snapshot)) {
-                    utils::logError("Failed to write snapshot to database");
-                }
-            } catch (const std::exception& e) {
-                utils::logError("Error writing to database: " + std::string(e.what()));
+    // Continue until processing done AND buffer empty
+    while (running_.load(std::memory_order_acquire) || !snapshotRingBuffer_->empty()) {
+        if (snapshotRingBuffer_->try_pop(wrapper)) {
+            batch.push_back(std::move(wrapper));
+            
+            // Flush when batch is full
+            if (batch.size() >= kBatchSize) {
+                writeBatch();
             }
         } else {
-            // Buffer is empty - wait for data
-            jsonRingBuffer_->wait_for_data();
+            // Buffer empty - flush pending batch
+            writeBatch();
+            
+            // Exit if done
+            if (!running_.load(std::memory_order_acquire) && snapshotRingBuffer_->empty()) {
+                break;
+            }
+            
+            // Avoid busy-wait
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
     
-    std::cout << "Database writer thread exiting." << std::endl;
+    // Final flush of any remaining items
+    writeBatch();
+    
+    // Recreate indexes after bulk load complete
+    if (dbWriter_) {
+        dbWriter_->recreateIndexes();
+    }
+    
+    // Write session stats and close session after all writes complete
+    if (dbWriter_) {
+        // Memory fence: ensure we see all writes from processing thread
+        std::atomic_thread_fence(std::memory_order_acquire);
+        
+        // Update session stats
+        if (sessionStats_.messagesReceived > 0) {
+            dbWriter_->updateSessionStats(
+                sessionStats_.messagesReceived,
+                sessionStats_.ordersProcessed,
+                sessionStats_.throughput,
+                sessionStats_.avgProcessNs,
+                sessionStats_.p99ProcessNs
+            );
+        }
+        
+        // Update final book state
+        if (sessionStats_.hasBookState) {
+            dbWriter_->updateFinalBookState(
+                sessionStats_.totalOrders,
+                sessionStats_.bidLevels,
+                sessionStats_.askLevels,
+                sessionStats_.bestBid,
+                sessionStats_.bestAsk,
+                sessionStats_.spread
+            );
+        }
+        
+        // End session
+        dbWriter_->endSession(true);
+    }
 }
 
 void WebSocketServer::stop() {
@@ -616,25 +687,7 @@ void WebSocketServer::stop() {
         return;
     }
     
-    std::cout << "Stopping server..." << std::endl;
     running_ = false;
-    
-    // Stop database writer thread (wait for it to finish processing remaining items)
-    if (dbWriterThread_.joinable()) {
-        std::cout << "Waiting for database writer thread to finish..." << std::endl;
-        jsonRingBuffer_->notify_all(); // Wake up blocking pop
-        dbWriterThread_.join();
-        std::cout << "Database writer thread stopped." << std::endl;
-    }
-    
-    // Close database writer
-    if (dbWriter_) {
-        std::cout << "Closing database writer..." << std::endl;
-        dbWriter_.reset();
-        std::cout << "Database writer closed." << std::endl;
-    }
-    
-    std::cout << "Server stopped." << std::endl;
 }
 
 double WebSocketServer::getThroughput() const {

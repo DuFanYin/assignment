@@ -33,13 +33,6 @@ int main() {
     dbConfig.maxConnections = cfg.getInt("postgres.max_connections", 10);
     dbConfig.connectionTimeout = cfg.getInt("postgres.connection_timeout", 30);
     
-    std::cout << "Starting WebSocket server on port " << wsPort << std::endl;
-    std::cout << "Symbol: (will be extracted from DBN file)" << std::endl;
-    std::cout << "Top Levels: " << topLevels << std::endl;
-    std::cout << "Output Full Book: " << (outputFullBook ? "true" : "false") << std::endl;
-    std::cout << "Ring Buffer Size: " << ringBufferSize << std::endl;
-    std::cout << "Database: " << dbConfig.host << ":" << dbConfig.port << "/" << dbConfig.dbname << std::endl;
-    
     auto server = std::make_unique<WebSocketServer>(wsPort, dbConfig, topLevels, outputFullBook, ringBufferSize);
     
     if (!server->start()) {
@@ -47,17 +40,10 @@ int main() {
         return 1;
     }
     
-    // Keep running
-    std::cout << "WebSocket server running. Press Ctrl+C to stop." << std::endl;
-    
     // Wait for interrupt
     std::this_thread::sleep_for(std::chrono::hours(24));
     
     server->stop();
-    
-    std::cout << "\n=== Processing Statistics ===" << std::endl;
-    std::cout << "Messages Processed: " << server->getMessagesProcessed() << std::endl;
-    std::cout << "Bytes Received: " << server->getBytesReceived() << std::endl;
     
     return 0;
 }

@@ -18,7 +18,7 @@ bool PostgresConnection::connect() {
         return true;
     }
     
-    // Build connection string
+    // Build connection string - keep it simple
     std::stringstream connInfo;
     connInfo << "host=" << config_.host
              << " port=" << config_.port
@@ -37,7 +37,9 @@ bool PostgresConnection::connect() {
         return false;
     }
     
-    utils::logInfo("Connected to PostgreSQL database: " + config_.dbname);
+    // Suppress NOTICE messages (only show WARNING and above)
+    PQexec(connection_, "SET client_min_messages TO WARNING");
+    
     return true;
 }
 
@@ -61,10 +63,7 @@ bool PostgresConnection::reconnect() {
 }
 
 bool PostgresConnection::checkConnection() {
-    if (!isConnected()) {
-        return reconnect();
-    }
-    return true;
+    return isConnected();
 }
 
 PostgresConnection::QueryResult PostgresConnection::execute(const std::string& query) {
@@ -227,6 +226,67 @@ PostgresConnection::QueryResult PostgresConnection::executePrepared(const std::s
     clearResult(pgResult);
     
     return result;
+}
+
+bool PostgresConnection::beginCopy(const std::string& tableName, const std::vector<std::string>& columns) {
+    if (!checkConnection()) {
+        return false;
+    }
+    
+    std::stringstream ss;
+    ss << "COPY " << tableName << " (";
+    for (size_t i = 0; i < columns.size(); ++i) {
+        if (i > 0) ss << ", ";
+        ss << columns[i];
+    }
+    ss << ") FROM STDIN WITH (FORMAT csv, DELIMITER '\t')";
+    
+    PGresult* result = PQexec(connection_, ss.str().c_str());
+    bool success = PQresultStatus(result) == PGRES_COPY_IN;
+    
+    if (!success) {
+        lastError_ = PQerrorMessage(connection_);
+    }
+    
+    clearResult(result);
+    return success;
+}
+
+bool PostgresConnection::putCopyData(const std::string& data) {
+    if (!connection_) {
+        return false;
+    }
+    
+    int result = PQputCopyData(connection_, data.c_str(), static_cast<int>(data.size()));
+    if (result != 1) {
+        lastError_ = PQerrorMessage(connection_);
+        return false;
+    }
+    
+    return true;
+}
+
+bool PostgresConnection::endCopy() {
+    if (!connection_) {
+        return false;
+    }
+    
+    int result = PQputCopyEnd(connection_, nullptr);
+    if (result != 1) {
+        lastError_ = PQerrorMessage(connection_);
+        return false;
+    }
+    
+    // Get result
+    PGresult* pgResult = PQgetResult(connection_);
+    bool success = PQresultStatus(pgResult) == PGRES_COMMAND_OK;
+    
+    if (!success) {
+        lastError_ = PQerrorMessage(connection_);
+    }
+    
+    clearResult(pgResult);
+    return success;
 }
 
 std::string PostgresConnection::escapeString(const std::string& input) const {

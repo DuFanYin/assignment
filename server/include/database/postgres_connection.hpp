@@ -38,6 +38,7 @@ public:
     void disconnect();
     bool isConnected() const;
     bool reconnect();
+    bool checkConnection();  // Check and auto-reconnect if needed
     
     // Query execution
     QueryResult execute(const std::string& query);
@@ -51,6 +52,11 @@ public:
     // Prepared statements
     bool prepareStatement(const std::string& stmtName, const std::string& query);
     QueryResult executePrepared(const std::string& stmtName, const std::vector<std::string>& params);
+    
+    // COPY command support for bulk loading
+    bool beginCopy(const std::string& tableName, const std::vector<std::string>& columns);
+    bool putCopyData(const std::string& data);
+    bool endCopy();
     
     // Utility functions
     std::string escapeString(const std::string& input) const;
@@ -68,7 +74,6 @@ private:
     
     void clearResult(PGresult* result);
     QueryResult processResult(PGresult* result);
-    bool checkConnection();
 };
 
 /**

@@ -65,8 +65,7 @@ public:
 private:
     void processDbnChunk(const std::vector<uint8_t>& chunk, PerSocketData* socketData, 
                         const std::function<void(const std::string&)>& sendMessage = nullptr);
-    void processDbnRecord(const uint8_t* data, size_t size);
-    void databaseWriterLoop();
+    void databaseWriterLoop(std::stop_token stopToken);
     
     int port_;
     PostgresConnection::Config dbConfig_;
@@ -76,14 +75,15 @@ private:
     
     // Order book and database writing
     std::unique_ptr<Book> orderBook_;
-    std::unique_ptr<RingBuffer<MboMessageWrapper>> jsonRingBuffer_;
-    std::thread dbWriterThread_;
+    std::unique_ptr<RingBuffer<MboMessageWrapper>> snapshotRingBuffer_;  // Ring buffer for snapshots to be written to DB
+    std::jthread dbWriterThread_;  // Database writer thread (C++20 jthread)
     
     std::unique_ptr<project::DatabaseWriter> dbWriter_;
     std::unique_ptr<project::JSONGenerator> jsonGenerator_;
     
     // Configuration
     std::string symbol_;
+    std::string currentSessionId_;  // Cached session ID - avoid touching dbWriter_ from hot path
     size_t topLevels_;
     bool outputFullBook_;
     
@@ -104,5 +104,22 @@ private:
     double getThroughput() const;
     double getAverageOrderProcessNs() const;
     uint64_t getP99OrderProcessNs() const;
+    
+    // Session stats captured atomically to pass to DB thread
+    struct SessionStats {
+        size_t messagesReceived = 0;
+        size_t ordersProcessed = 0;
+        double throughput = 0.0;
+        int64_t avgProcessNs = 0;
+        uint64_t p99ProcessNs = 0;
+        size_t totalOrders = 0;
+        size_t bidLevels = 0;
+        size_t askLevels = 0;
+        double bestBid = 0.0;
+        double bestAsk = 0.0;
+        double spread = 0.0;
+        bool hasBookState = false;
+    };
+    SessionStats sessionStats_;
 };
 

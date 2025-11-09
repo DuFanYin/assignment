@@ -5,6 +5,10 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <vector>
+
+// Forward declaration
+struct MboMessageWrapper;
 
 namespace project {
 
@@ -24,6 +28,13 @@ public:
     
     // Write order book snapshot
     bool writeSnapshot(const BookSnapshot& snapshot);
+    
+    // Write multiple snapshots in a batch (faster)
+    bool writeBatch(const std::vector<MboMessageWrapper>& batch);
+    
+    // Index management for bulk operations
+    bool dropIndexes();
+    bool recreateIndexes();
     
 private:
     PostgresConnection conn_;

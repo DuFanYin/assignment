@@ -41,6 +41,8 @@ public:
         
         buffer_[current_write & mask_] = item;
         write_pos_.store(next_write, std::memory_order_release);
+        // Wake up consumers waiting for data
+        write_pos_.notify_one();
         return true;
     }
     

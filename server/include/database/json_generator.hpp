@@ -17,6 +17,9 @@ public:
     // Generate JSON from database for a specific symbol (latest session)
     std::string generateJSONForSymbol(const std::string& symbol);
     
+    // Get database connection (for status checks)
+    PostgresConnection& getConnection() { return conn_; }
+    
 private:
     PostgresConnection conn_;
     
