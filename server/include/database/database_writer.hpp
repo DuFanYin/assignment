@@ -26,9 +26,6 @@ public:
                              double bestBid, double bestAsk, double spread);
     std::string getCurrentSessionId() const { return currentSessionId_; }
     
-    // Write order book snapshot
-    bool writeSnapshot(const BookSnapshot& snapshot);
-    
     // Write multiple snapshots in a batch (faster)
     bool writeBatch(const std::vector<MboMessageWrapper>& batch);
     

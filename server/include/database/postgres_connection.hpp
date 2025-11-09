@@ -1,9 +1,7 @@
 #pragma once
 
 #include <string>
-#include <memory>
 #include <vector>
-#include <optional>
 #include <libpq-fe.h>
 
 /**
@@ -62,10 +60,6 @@ public:
     std::string escapeString(const std::string& input) const;
     std::string getLastError() const;
     
-    // Connection pool support
-    static std::shared_ptr<PostgresConnection> getPooledConnection(const Config& config);
-    void releaseToPool();
-    
 private:
     Config config_;
     PGconn* connection_;
@@ -74,22 +68,5 @@ private:
     
     void clearResult(PGresult* result);
     QueryResult processResult(PGresult* result);
-};
-
-/**
- * RAII wrapper for database transactions
- */
-class Transaction {
-public:
-    explicit Transaction(PostgresConnection& conn);
-    ~Transaction();
-    
-    bool commit();
-    void rollback();
-    
-private:
-    PostgresConnection& conn_;
-    bool committed_;
-    bool active_;
 };
 
