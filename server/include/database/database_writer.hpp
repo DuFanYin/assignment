@@ -24,7 +24,7 @@ public:
                            double throughput, int64_t avgProcessNs, uint64_t p99ProcessNs);
     void updateFinalBookState(size_t totalOrders, size_t bidLevels, size_t askLevels,
                              double bestBid, double bestAsk, double spread);
-    std::string getCurrentSessionId() const { return currentSessionId_; }
+    std::string getCurrentSessionId() const { return activeSessionId_; }
     
     // Write multiple snapshots in a batch (faster)
     bool writeBatch(const std::vector<MboMessageWrapper>& batch);
@@ -34,10 +34,10 @@ public:
     bool recreateIndexes();
     
 private:
-    PostgresConnection conn_;
-    std::string currentSessionId_;
-    std::atomic<bool> sessionActive_{false};
-    std::atomic<size_t> snapshotsWritten_{0};
+    PostgresConnection postgresConnection_;
+    std::string activeSessionId_;
+    std::atomic<bool> isSessionActive_{false};
+    std::atomic<size_t> totalSnapshotsWritten_{0};
     
     // Prepared statements
     bool prepareStatements();

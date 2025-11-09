@@ -45,20 +45,20 @@ public:
     
     bool start();
     void stop();
-    bool isRunning() const { return running_; }
+    bool isRunning() const { return isServerRunning_; }
     
     // Statistics
-    size_t getMessagesProcessed() const { return messagesProcessed_; }
-    size_t getBytesReceived() const { return bytesReceived_; }
+    size_t getMessagesProcessed() const { return totalMessagesProcessed_; }
+    size_t getBytesReceived() const { return totalBytesReceived_; }
     
     struct PerSocketData {
         std::vector<uint8_t> buffer;
-        size_t bytesReceived = 0;
-        bool metadataReceived = false;
+        size_t totalBytesReceived = 0;
+        bool isMetadataReceived = false;
         std::string fileName;
         size_t fileSize = 0;
         std::string tempFilePath;
-        bool processingStarted = false;
+        bool isProcessingStarted = false;
         std::function<void(const std::string&)> sendMessage; // Callback to send messages
     };
     
@@ -68,37 +68,37 @@ private:
     void databaseWriterLoop(std::stop_token stopToken);
     
     int port_;
-    PostgresConnection::Config dbConfig_;
-    std::atomic<bool> running_;
-    std::atomic<size_t> messagesProcessed_;
-    std::atomic<size_t> bytesReceived_;
+    PostgresConnection::Config databaseConfig_;
+    std::atomic<bool> isServerRunning_;
+    std::atomic<size_t> totalMessagesProcessed_;
+    std::atomic<size_t> totalBytesReceived_;
     
     // Order book and database writing
     std::unique_ptr<Book> orderBook_;
     std::unique_ptr<RingBuffer<MboMessageWrapper>> snapshotRingBuffer_;  // Ring buffer for snapshots to be written to DB
-    std::jthread dbWriterThread_;  // Database writer thread (C++20 jthread)
+    std::jthread databaseWriterThread_;  // Database writer thread (C++20 jthread)
     
-    std::unique_ptr<project::DatabaseWriter> dbWriter_;
+    std::unique_ptr<project::DatabaseWriter> databaseWriter_;
     std::unique_ptr<project::JSONGenerator> jsonGenerator_;
     
     // Configuration
     std::string symbol_;
-    std::string currentSessionId_;  // Cached session ID - avoid touching dbWriter_ from hot path
+    std::string activeSessionId_;  // Cached session ID - avoid touching databaseWriter_ from hot path
     size_t topLevels_;
     bool outputFullBook_;
     
-    // Timing
-    std::chrono::steady_clock::time_point startTime_;
-    std::chrono::steady_clock::time_point endTime_;
+    // Processing thread timing
+    std::chrono::steady_clock::time_point processingStartTime_;
+    std::chrono::steady_clock::time_point processingEndTime_;
     
-    // Processing statistics (same as receiver version)
-    std::atomic<size_t> receivedMessages_;
-    std::atomic<size_t> processedOrders_;
-    uint64_t totalProcessTimeNs_;
-    std::atomic<uint64_t> timingSamples_;
+    // Processing thread statistics (same as receiver version)
+    std::atomic<size_t> processingMessagesReceived_;
+    std::atomic<size_t> processingOrdersProcessed_;
+    uint64_t processingTotalTimeNs_;
+    std::atomic<uint64_t> processingTimingSamples_;
     static constexpr size_t kTimingReservoirSize = 8192;
-    std::vector<uint64_t> timingReservoir_;
-    std::minstd_rand rng_;
+    std::vector<uint64_t> processingTimingReservoir_;
+    std::minstd_rand processingRng_;
     
     // Statistics getters (same as receiver version)
     double getThroughput() const;

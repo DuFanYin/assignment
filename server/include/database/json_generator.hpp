@@ -18,10 +18,10 @@ public:
     std::string generateJSONForSymbol(const std::string& symbol);
     
     // Get database connection (for status checks)
-    PostgresConnection& getConnection() { return conn_; }
+    PostgresConnection& getConnection() { return postgresConnection_; }
     
 private:
-    PostgresConnection conn_;
+    PostgresConnection postgresConnection_;
     
     // Helper to build JSON from query results
     std::string buildJSON(const PostgresConnection::QueryResult& snapshotsRes);

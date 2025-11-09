@@ -7,28 +7,28 @@
 namespace project {
 
 JSONGenerator::JSONGenerator(const PostgresConnection::Config& config)
-    : conn_(config) {
-    if (!conn_.connect()) {
+    : postgresConnection_(config) {
+    if (!postgresConnection_.connect()) {
         throw std::runtime_error("Failed to connect to PostgreSQL database");
     }
 }
 
 JSONGenerator::~JSONGenerator() {
-    conn_.disconnect();
+    postgresConnection_.disconnect();
 }
 
 std::string JSONGenerator::generateJSON(const std::string& sessionId) {
-    if (!conn_.isConnected()) {
+    if (!postgresConnection_.isConnected()) {
         return "{\"error\":\"Not connected to database\"}";
     }
     
     // Query all snapshots for this session
     std::string sql = "SELECT id, symbol, timestamp_ns, best_bid_price, best_bid_size, best_bid_count, "
                      "best_ask_price, best_ask_size, best_ask_count, total_orders, bid_level_count, ask_level_count "
-                     "FROM order_book_snapshots WHERE session_id = '" + conn_.escapeString(sessionId) + "' "
+                     "FROM order_book_snapshots WHERE session_id = '" + postgresConnection_.escapeString(sessionId) + "' "
                      "ORDER BY timestamp_ns ASC";
     
-    auto result = conn_.execute(sql);
+    auto result = postgresConnection_.execute(sql);
     if (!result.success) {
         return "{\"error\":\"Query failed: " + result.errorMessage + "\"}";
     }
@@ -37,16 +37,16 @@ std::string JSONGenerator::generateJSON(const std::string& sessionId) {
 }
 
 std::string JSONGenerator::generateJSONForSymbol(const std::string& symbol) {
-    if (!conn_.isConnected()) {
+    if (!postgresConnection_.isConnected()) {
         return "{\"error\":\"Not connected to database\"}";
     }
     
     // Find the latest session for this symbol
     std::string sql = "SELECT session_id FROM processing_sessions "
-                     "WHERE symbol = '" + conn_.escapeString(symbol) + "' AND status = 'completed' "
+                     "WHERE symbol = '" + postgresConnection_.escapeString(symbol) + "' AND status = 'completed' "
                      "ORDER BY start_time DESC LIMIT 1";
     
-    auto result = conn_.execute(sql);
+    auto result = postgresConnection_.execute(sql);
     if (!result.success || result.rows.empty()) {
         return "{\"error\":\"No completed sessions found for symbol\"}";
     }
@@ -60,7 +60,7 @@ std::string JSONGenerator::fetchLevels(const std::string& snapshotId, const std:
     std::string sql = "SELECT price, size, count FROM " + tableName + 
                      " WHERE snapshot_id = " + snapshotId + " ORDER BY level_index ASC";
     
-    auto result = conn_.execute(sql);
+    auto result = postgresConnection_.execute(sql);
     if (!result.success) {
         return "[]";
     }
