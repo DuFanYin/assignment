@@ -1,4 +1,5 @@
 #include "project/config.hpp"
+#include "project/utils.hpp"
 #include <fstream>
 #include <algorithm>
 
@@ -7,12 +8,12 @@ bool Config::loadFromFile(const std::string& path) {
     if (!in.is_open()) return false;
     std::string line;
     while (std::getline(in, line)) {
-        line = trim(line);
+        line = utils::trim(line);
         if (line.empty() || line[0] == '#') continue;
         auto pos = line.find('=');
         if (pos == std::string::npos) continue;
-        std::string key = trim(line.substr(0, pos));
-        std::string value = trim(line.substr(pos + 1));
+        std::string key = utils::trim(line.substr(0, pos));
+        std::string value = utils::trim(line.substr(pos + 1));
         kv_[key] = value;
     }
     return true;
@@ -42,13 +43,3 @@ bool Config::getBool(const std::string& key, bool def) const {
     if (v == "0" || v == "false" || v == "no" || v == "off") return false;
     return def;
 }
-
-std::string Config::trim(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && isspace(static_cast<unsigned char>(s[start]))) start++;
-    size_t end = s.size();
-    while (end > start && isspace(static_cast<unsigned char>(s[end - 1]))) end--;
-    return s.substr(start, end - start);
-}
-
-

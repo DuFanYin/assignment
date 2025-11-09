@@ -69,23 +69,15 @@ bool WebSocketServer::start() {
         return false;
     }
     
-    // Set isServerRunning_ to true BEFORE starting the thread to avoid race condition
-    isServerRunning_ = true;
-    
-    // Start database writer thread (jthread with stop token)
-    databaseWriterThread_ = std::jthread([this](std::stop_token st) {
-        this->databaseWriterLoop(st);
-    });
-    
-    // Give the thread a moment to start
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Note: Database writer thread is started per-cycle in startProcessingThread()
+    // We don't start it here to allow multiple cycles
     
     // Start uWebSockets server
     uWS::App().ws<WebSocketServer::PerSocketData>("/*", {
         .compression = uWS::CompressOptions(uWS::DEDICATED_COMPRESSOR | uWS::DEDICATED_DECOMPRESSOR),
-        .maxPayloadLength = 100 * 1024 * 1024, // 100MB
+        .maxPayloadLength = kMaxPayloadLength,
         .idleTimeout = 16,
-        .maxBackpressure = 100 * 1024 * 1024,
+        .maxBackpressure = kMaxPayloadLength,
         .closeOnBackpressureLimit = false,
         .resetIdleTimeoutOnSend = false,
         .sendPingsAutomatically = true,
@@ -141,28 +133,6 @@ bool WebSocketServer::start() {
                         response["type"] = "metadata_received";
                         response["message"] = "Ready to receive file data";
                         ws->send(response.dump(), uWS::OpCode::TEXT, false);
-                    } else if (json.contains("type") && json["type"] == "complete") {
-                        // Process the complete DBN file (if not already started)
-                        if (!data->isProcessingStarted && !data->tempFilePath.empty() && std::filesystem::exists(data->tempFilePath)) {
-                            data->isProcessingStarted = true;
-                            
-                            // Send status update
-                            nlohmann::json status;
-                            status["type"] = "stats";
-                            status["status"] = "Processing file...";
-                            status["messagesProcessed"] = 0;
-                            ws->send(status.dump(), uWS::OpCode::TEXT, false);
-                            
-                            // Process in a separate thread to avoid blocking
-                            std::string tempPath = data->tempFilePath;
-                            std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                            
-                            std::jthread([this, tempPath, sendMsg](std::stop_token) {
-                                PerSocketData tempData;
-                                tempData.tempFilePath = tempPath;
-                                processDbnChunk({}, &tempData, sendMsg);
-                            }).detach();
-                        }
                     }
                 } catch (const std::exception& e) {
                     nlohmann::json error;
@@ -201,7 +171,7 @@ bool WebSocketServer::start() {
                 
                 // Check if file upload is complete and automatically start processing
                 if (!data->isProcessingStarted && data->buffer.size() >= data->fileSize && data->fileSize > 0) {
-                    data->isProcessingStarted = true;
+                    data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
                     
                     // Send status update
                     nlohmann::json status;
@@ -210,38 +180,25 @@ bool WebSocketServer::start() {
                     status["messagesProcessed"] = 0;
                     ws->send(status.dump(), uWS::OpCode::TEXT, false);
                     
-                    // Process the complete DBN file in a separate thread
-                    std::string tempPath = data->tempFilePath;
-                    std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                    
-                    std::jthread([this, tempPath, sendMsg](std::stop_token) {
-                        PerSocketData tempData;
-                        tempData.tempFilePath = tempPath;
-                        processDbnChunk({}, &tempData, sendMsg);
-                    }).detach();
+                    // Start processing
+                    startProcessingThread(data->tempFilePath, data->sendMessage);
                 }
             }
         },
         .close = [this](auto *ws, int code, std::string_view message) {
             auto *data = ws->getUserData();
             
-            // Process any remaining data if not already processing
+            // Safety fallback: Process any remaining data if not already processing
+            // (This should rarely trigger since processing auto-starts when upload completes)
             if (!data->isProcessingStarted && !data->tempFilePath.empty() && std::filesystem::exists(data->tempFilePath)) {
-                    data->isProcessingStarted = true;
-                    std::string tempPath = data->tempFilePath;
-                    std::function<void(const std::string&)> sendMsg = data->sendMessage;
-                    
-                std::jthread([this, tempPath, sendMsg](std::stop_token) {
-                        PerSocketData tempData;
-                        tempData.tempFilePath = tempPath;
-                        processDbnChunk({}, &tempData, sendMsg);
-                    }).detach();
+                    data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
+                    startProcessingThread(data->tempFilePath, data->sendMessage);
             }
             
             // Clean up temp file after a delay (to allow processing to complete)
             if (!data->tempFilePath.empty()) {
                 std::thread([tempPath = data->tempFilePath]() {
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    std::this_thread::sleep_for(kTempFileCleanupDelay);
                     std::filesystem::remove(tempPath);
                 }).detach();
             }
@@ -259,8 +216,9 @@ bool WebSocketServer::start() {
             return;
         }
         
-        // Query database for session status
-        std::string sql = "SELECT status FROM processing_sessions WHERE session_id = '" + sessionId + "'";
+        // Query database for session status (use parameterized query to prevent SQL injection)
+        std::string escapedSessionId = jsonGenerator_->getConnection().escapeString(sessionId);
+        std::string sql = "SELECT status FROM processing_sessions WHERE session_id = '" + escapedSessionId + "'";
         auto result = jsonGenerator_->getConnection().execute(sql);
         
         nlohmann::json response;
@@ -343,7 +301,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
         if (!metadata.symbols.empty()) {
             symbol_ = metadata.symbols[0];  // Use first symbol from the file
             orderBook_->setSymbol(symbol_);
-            std::cout << "Processing " << symbol_ << "..." << std::endl;
         } else {
             utils::logWarning("No symbols found in DBN file metadata");
         }
@@ -380,7 +337,7 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             if (record->RType() == db::RType::Mbo) {
                 const auto& mbo = record->Get<db::MboMsg>();
                 
-                // Start timing on first processed message (same as receiver version)
+                // Start timing on first processed message
                 if (!timingStarted) {
                     processingStartTime_ = std::chrono::steady_clock::now();
                     timingStarted = true;
@@ -431,7 +388,7 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                     processingTotalTimeNs_ += elapsedNs;
                     ++processingTimingSamples_;
                     
-                    // Update timing reservoir (same as receiver version)
+                    // Update timing reservoir
                     if (processingTimingReservoir_.size() < kTimingReservoirSize) {
                         processingTimingReservoir_.push_back(elapsedNs);
                     } else {
@@ -449,8 +406,8 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                     
                     totalMessagesProcessed_++;
                     
-                    // Send periodic status updates (every 1000 messages)
-                    if (sendMessage && totalMessagesProcessed_ % 1000 == 0) {
+                    // Send periodic status updates
+                    if (sendMessage && totalMessagesProcessed_ % kStatusUpdateInterval == 0) {
                         nlohmann::json stats;
                         stats["type"] = "stats";
                         stats["status"] = "Processing...";
@@ -458,7 +415,7 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                         sendMessage(stats.dump());
                     }
                 } catch (const std::invalid_argument& e) {
-                    // Handle missing orders/levels gracefully (same as src version)
+                    // Handle missing orders/levels gracefully
                     std::string error_msg = e.what();
                     if (error_msg.find("No order with ID") != std::string::npos ||
                         error_msg.find("Received event for unknown level") != std::string::npos) {
@@ -471,8 +428,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                 }
             }
         }
-        
-        std::cout << "Processed " << totalMessagesProcessed_.load() << " messages" << std::endl;
         
         // End timing when processing completes
         processingEndTime_ = std::chrono::steady_clock::now();
@@ -495,8 +450,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             databaseWriterThread_.join();
         }
         
-        // Send completion message - everything is done including DB writes
-        // JSON generation happens on-demand when user clicks download
         if (sendMessage) {
             nlohmann::json complete;
             complete["type"] = "complete";
@@ -505,9 +458,7 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             complete["messagesProcessed"] = totalMessagesProcessed_.load();
             complete["bytesReceived"] = totalBytesReceived_.load();
             complete["dbWritesPending"] = snapshotRingBuffer_->size();
-            complete["sessionId"] = activeSessionId_;  // Use cached value - don't touch databaseWriter_
-            
-            // Calculate throughput
+            complete["sessionId"] = activeSessionId_;
             double throughput = getThroughput();
             complete["messageThroughput"] = throughput;
             
@@ -532,8 +483,8 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                 auto finalAsk = finalBbo.second;
                 
                 if (finalBid.price != db::kUndefPrice && finalAsk.price != db::kUndefPrice) {
-                    double bidValue = static_cast<double>(finalBid.price) / 1000000000.0;
-                    double askValue = static_cast<double>(finalAsk.price) / 1000000000.0;
+                    double bidValue = static_cast<double>(finalBid.price) / static_cast<double>(kPriceScaleFactor);
+                    double askValue = static_cast<double>(finalAsk.price) / static_cast<double>(kPriceScaleFactor);
                     double spreadValue = std::abs(askValue - bidValue);
                     
                     complete["bestBid"] = bidValue;
@@ -546,7 +497,6 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                 }
             }
             
-            std::cout << "Session complete: " << activeSessionId_ << std::endl;
             sendMessage(complete.dump());
         }
         
@@ -560,8 +510,8 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
                 sessionStats_.totalOrders = orderBook_->GetOrderCount();
                 sessionStats_.bidLevels = orderBook_->GetBidLevelCount();
                 sessionStats_.askLevels = orderBook_->GetAskLevelCount();
-                sessionStats_.bestBid = static_cast<double>(finalBid.price) / 1000000000.0;
-                sessionStats_.bestAsk = static_cast<double>(finalAsk.price) / 1000000000.0;
+                sessionStats_.bestBid = static_cast<double>(finalBid.price) / static_cast<double>(kPriceScaleFactor);
+                sessionStats_.bestAsk = static_cast<double>(finalAsk.price) / static_cast<double>(kPriceScaleFactor);
                 sessionStats_.spread = std::abs(sessionStats_.bestAsk - sessionStats_.bestBid);
                 sessionStats_.hasBookState = true;
                 
@@ -570,9 +520,7 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             }
         }
         
-        // Note: DB thread will write stats and end session when it finishes
-        
-        // Clean up order book after processing completes
+        // DB thread will write stats and end session when it finishes
         if (orderBook_) {
             orderBook_->Clear();
         }
@@ -637,7 +585,7 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
             }
             
             // Avoid busy-wait
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(kDatabaseWriterSleepMs);
         }
     }
     
@@ -688,6 +636,17 @@ void WebSocketServer::stop() {
     }
     
     isServerRunning_ = false;
+    
+    // Wait for processing thread to complete
+    if (processingThread_.has_value() && processingThread_->joinable()) {
+        processingThread_->join();
+    }
+    processingThread_.reset();
+    
+    // Wait for database writer thread to complete
+    if (databaseWriterThread_.joinable()) {
+        databaseWriterThread_.join();
+    }
 }
 
 double WebSocketServer::getThroughput() const {
@@ -721,5 +680,30 @@ uint64_t WebSocketServer::getP99OrderProcessNs() const {
     if (idx > sampleCount) idx = sampleCount;
     std::nth_element(samples.begin(), samples.begin() + (idx - 1), samples.end());
     return samples[idx - 1];
+}
+
+void WebSocketServer::startProcessingThread(const std::string& tempFilePath, const std::function<void(const std::string&)>& sendMessage) {
+    // Once processing starts, it cannot be stopped - runs to completion independently of WebSocket connection
+    if (processingThread_.has_value() && processingThread_->joinable()) {
+        processingThread_->join();
+    }
+    processingThread_.reset();
+    if (databaseWriterThread_.joinable()) {
+        databaseWriterThread_.join();
+    }
+    isServerRunning_.store(true, std::memory_order_release);
+    if (orderBook_) {
+        orderBook_->Clear();
+    }
+    databaseWriterThread_ = std::jthread([this](std::stop_token st) {
+        this->databaseWriterLoop(st);
+    });
+    std::this_thread::sleep_for(kThreadStartupDelay);
+    
+    processingThread_ = std::jthread([this, tempFilePath, sendMessage](std::stop_token) {
+        PerSocketData tempData;
+        tempData.tempFilePath = tempFilePath;
+        processDbnChunk({}, &tempData, sendMessage);
+    });
 }
 

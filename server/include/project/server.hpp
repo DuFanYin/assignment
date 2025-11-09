@@ -8,6 +8,7 @@
 #include <chrono>
 #include <functional>
 #include <random>
+#include <optional>
 #include "project/order_book.hpp"
 #include "project/ring_buffer.hpp"
 #include "project/book_snapshot.hpp"
@@ -77,6 +78,7 @@ private:
     std::unique_ptr<Book> orderBook_;
     std::unique_ptr<RingBuffer<MboMessageWrapper>> snapshotRingBuffer_;  // Ring buffer for snapshots to be written to DB
     std::jthread databaseWriterThread_;  // Database writer thread (C++20 jthread)
+    std::optional<std::jthread> processingThread_;  // Processing thread (only one at a time)
     
     std::unique_ptr<project::DatabaseWriter> databaseWriter_;
     std::unique_ptr<project::JSONGenerator> jsonGenerator_;
@@ -100,10 +102,21 @@ private:
     std::vector<uint64_t> processingTimingReservoir_;
     std::minstd_rand processingRng_;
     
+    // Constants
+    static constexpr size_t kMaxPayloadLength = 100 * 1024 * 1024;  // 100MB
+    static constexpr size_t kStatusUpdateInterval = 1000;  // Update status every 1000 messages
+    static constexpr size_t kPriceScaleFactor = 1000000000;  // Price scaling factor (nanos to dollars)
+    static constexpr std::chrono::milliseconds kThreadStartupDelay{100};
+    static constexpr std::chrono::seconds kTempFileCleanupDelay{5};
+    static constexpr std::chrono::milliseconds kDatabaseWriterSleepMs{1};
+    
     // Statistics getters (same as receiver version)
     double getThroughput() const;
     double getAverageOrderProcessNs() const;
     uint64_t getP99OrderProcessNs() const;
+    
+    // Helper function to start processing thread
+    void startProcessingThread(const std::string& tempFilePath, const std::function<void(const std::string&)>& sendMessage);
     
     // Session stats captured atomically to pass to DB thread
     struct SessionStats {

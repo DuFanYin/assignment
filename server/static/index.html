@@ -97,6 +97,22 @@
             font-weight: bold;
             font-size: 12px;
         }
+        .notes-section {
+            margin-top: 15px;
+            padding: 12px;
+            background-color: #111;
+            border: 1px solid #333;
+            border-radius: 4px;
+            display: none;
+            color: #fff;
+            font-size: 12px;
+            font-family: Arial, sans-serif;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .notes-section.show {
+            display: block;
+        }
         .stats {
             margin-top: 15px;
             padding: 15px;
@@ -185,12 +201,6 @@
             background-color: #666;
             cursor: not-allowed;
         }
-        #stopBtn {
-            background-color: #666;
-        }
-        #stopBtn:hover:not(:disabled) {
-            background-color: #888;
-        }
         #fileName {
             margin-top: 8px;
             font-size: 12px;
@@ -216,7 +226,8 @@
         </div>
         
         <button id="uploadBtn" disabled>Upload & Process</button>
-        <button id="stopBtn" disabled>Stop Processing</button>
+        
+        <div class="notes-section" id="notesSection">Metrics only account for file streaming and order processing time; they do not account for the time taken to write data into the database.</div>
         
         <div class="stats" id="stats">
             <h3>Processing Statistics</h3>
@@ -233,7 +244,6 @@
         const fileInput = document.getElementById('fileInput');
         const uploadArea = document.getElementById('uploadArea');
         const uploadBtn = document.getElementById('uploadBtn');
-        const stopBtn = document.getElementById('stopBtn');
         const status = document.getElementById('status');
         const progress = document.getElementById('progress');
         const progressBar = document.getElementById('progressBar');
@@ -244,7 +254,6 @@
         let file = null;
         let chunkSize = 64 * 1024; // 64KB chunks
         let currentOffset = 0;
-        let totalBytes = 0;
         let messagesProcessed = 0;
         let currentSessionId = null;
         
@@ -289,22 +298,11 @@
             startUpload();
         });
         
-        // Stop button
-        stopBtn.addEventListener('click', () => {
-            if (ws) {
-                ws.close();
-                ws = null;
-            }
-            showStatus('Processing stopped.', 'info');
-            resetUI();
-        });
-        
         function startUpload() {
             if (!file) return;
             
             // Reset state
             currentOffset = 0;
-            totalBytes = 0;
             messagesProcessed = 0;
             currentSessionId = null;
             
@@ -319,10 +317,10 @@
             
             ws.onopen = () => {
                 showStatus('Connected to server. Starting upload...', 'info');
+                document.getElementById('notesSection').classList.add('show');
                 stats.classList.add('show');
                 document.getElementById('statConnection').textContent = 'Connected';
                 uploadBtn.disabled = true;
-                stopBtn.disabled = false;
                 progress.style.display = 'block';
                 
                 // Send file metadata first
@@ -431,7 +429,6 @@
         
         function resetUI() {
             uploadBtn.disabled = false;
-            stopBtn.disabled = true;
             if (ws) {
                 ws.close();
                 ws = null;

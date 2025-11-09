@@ -12,8 +12,6 @@ public:
     bool getBool(const std::string& key, bool def) const;
 
 private:
-    static std::string trim(const std::string& s);
     std::unordered_map<std::string, std::string> kv_;
 };
-
 

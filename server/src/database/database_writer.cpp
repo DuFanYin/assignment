@@ -2,10 +2,8 @@
 #include "project/utils.hpp"
 #include "project/server.hpp"  // For MboMessageWrapper
 #include <sstream>
-#include <iomanip>
 #include <chrono>
 #include <random>
-#include <ctime>
 
 namespace project {
 
@@ -244,11 +242,6 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
         }
     
     totalSnapshotsWritten_ += batch.size();
-    
-    // Log progress every 20000 items
-    if (totalSnapshotsWritten_ % 20000 == 0) {
-        std::cout << "Written " << totalSnapshotsWritten_.load() << " snapshots..." << std::endl;
-    }
     
     return true;
 }

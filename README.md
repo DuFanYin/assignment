@@ -1,10 +1,10 @@
 # WebSocket Order Book Server
 
+A high-performance server for processing DBN (Databento) order book files, storing snapshots in PostgreSQL, and serving JSON output on-demand.
+
 ## Prerequisites & Setup
 
 ### Required Software
-
-Before building and running the server, ensure you have the following installed:
 
 **Build Tools:**
 - **CMake 3.16+** - Build system
@@ -53,7 +53,6 @@ The script will automatically:
 
 The build script will also automatically download and build third-party dependencies (databento-cpp, uWebSockets) on first build.
 
-
 ### Configuration
 
 Edit `server/config/config.ini` to configure server and database settings:
@@ -98,9 +97,13 @@ Or from the project root:
 
 ## Architecture
 
+### Overview
+
+The server processes DBN files containing market-by-order (MBO) messages, maintains an in-memory order book, captures snapshots after each update, and stores them in PostgreSQL. The architecture uses a per-cycle threading model where each file upload spawns dedicated processing and database writer threads that run to completion.
+
 ### Threading Model
 
-The server uses a multi-threaded architecture optimized for performance:
+The server uses a per-cycle multi-threaded architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -111,21 +114,31 @@ The server uses a multi-threaded architecture optimized for performance:
 │  - Handles download requests                                │
 └────────────────┬────────────────────────────────────────────┘
                  │
-                 ├─► Processing Thread (jthread, detached)
+                 │ (per file upload cycle)
+                 │
+                 ├─► Processing Thread (jthread, stored)
                  │   - Reads DBN file via DbnFileStore
                  │   - Applies MBO messages to order book
                  │   - Captures snapshots after each update
                  │   - Pushes snapshots to ring buffer
                  │   - Waits for DB writes to complete
                  │   - Sends completion message to client
+                 │   - Cannot be stopped once started
                  │
-                 └─► Database Writer Thread (jthread)
+                 └─► Database Writer Thread (jthread, per-cycle)
                      - Drops indexes for faster bulk loading
                      - Pops snapshots from ring buffer
                      - Writes snapshots via PostgreSQL COPY
                      - Recreates indexes after bulk load
                      - Updates session stats and ends session
+                     - Exits after cycle completes
 ```
+
+**Cycle Lifecycle:**
+- Each file upload starts a new cycle
+- Processing thread spawns → Database writer thread spawns
+- Both threads run to completion
+- Next cycle can start after previous cycle completes
 
 ### Data Flow
 
@@ -172,73 +185,80 @@ Processing Thread
 
 ### Workflow
 
+**Per-Cycle Processing:**
+
 1. **User uploads DBN file** through web interface
-2. **Server receives file** via WebSocket binary messages
-3. **Processing thread spawns** to handle the file:
+2. **Server receives file** via WebSocket binary messages and writes to temporary file
+3. **Processing thread spawns** when file upload completes:
    - Reads DBN records using `DbnFileStore`
    - Applies each MBO message to order book
-   - Captures snapshot (BBO, top-N levels, statistics)
+   - Captures snapshot (BBO, top-N levels, statistics) after each update
    - Pushes snapshot to lock-free ring buffer
-4. **Database writer thread** (running continuously):
+   - Cannot be stopped once started
+4. **Database writer thread spawns** at the start of the cycle:
    - Drops indexes at start of session for faster bulk loading
    - Pops snapshots from ring buffer in batches (5000 items)
    - Writes snapshots to PostgreSQL using COPY commands
    - Recreates indexes after all snapshots are written
    - Updates session statistics and final book state
    - Ends database session
+   - Exits after cycle completes
 5. **Processing thread waits** for database writer to complete
 6. **Completion message sent** to frontend (everything is done)
 7. **User downloads JSON** via download button (queries database on-demand)
-
+8. **Next cycle** can start when user uploads another file
 
 ## Implementation Details
 
-### Thread Synchronization & Delegation Architecture
+### Thread Synchronization & Delegation
 
-**Processing Thread → Database Thread Delegation:**
+The architecture uses **delegation via ring buffer** to separate processing from database I/O:
 
-The key architectural pattern is **delegation via ring buffer**:
-
-1. **Processing Thread** (hot path, performance-critical, `std::jthread`):
+1. **Processing Thread** (`std::optional<std::jthread>`):
+   - Spawns per-cycle when file upload completes
    - Reads DBN file and applies MBO messages to order book
    - Captures snapshot after each message
-   - **Pushes snapshot to lock-free ring buffer** (non-blocking when space available)
-   - **Never writes to database directly** - pure in-memory operations
-   - **Waits for DB thread to complete** before sending completion message
+   - Pushes snapshot to lock-free ring buffer (non-blocking when space available)
+   - Never writes to database directly - pure in-memory operations
+   - Waits for DB thread to complete before sending completion message
    - Captures session statistics into `SessionStats` struct with memory fences
-   - Uses `std::jthread` for consistency with database writer thread (detached after spawn)
+   - Stored in `processingThread_` member variable for proper lifecycle management
+   - Cannot be stopped once started - runs to completion
+   - Clears order book after processing completes
 
-2. **Database Writer Thread** (background, I/O operations, `std::jthread`):
-   - **Drops indexes** at start of session for faster bulk loading
-   - **Pops snapshots from ring buffer** in batches (blocking wait when empty)
-   - Writes snapshots to PostgreSQL using **COPY commands** for maximum performance
-   - **Recreates indexes** after all snapshots are written
+2. **Database Writer Thread** (`std::jthread`, per-cycle):
+   - Spawns per-cycle in `startProcessingThread()` before processing thread
+   - Drops indexes at start of session for faster bulk loading
+   - Pops snapshots from ring buffer in batches (blocking wait when empty)
+   - Writes snapshots to PostgreSQL using COPY commands
+   - Recreates indexes after all snapshots are written
    - Updates session statistics and final book state
-   - Runs continuously until server stops AND ring buffer is empty
-   - Uses `std::jthread` with stop token for graceful shutdown
+   - Exits after cycle completes (when processing done AND buffer empty)
+   - Next cycle spawns a new database writer thread
 
 **Ring Buffer Implementation:**
-- **Lock-free SPSC** (Single Producer Single Consumer) queue
+- Lock-free SPSC (Single Producer Single Consumer) queue
 - C++20 atomics with `wait/notify` for efficient blocking
 - Producer pushes, consumer pops - no mutex contention
 - Power-of-2 size with bitmask indexing for fast modulo
 - Cache-line aligned read/write positions to avoid false sharing
 
 **Database Session Management:**
-- Each upload creates a unique session ID in database
+- Each upload cycle creates a unique session ID in database
 - Session tracks: file metadata, statistics, snapshots, final state
 - Multiple sessions can exist concurrently in database
 - Session ID is returned to frontend for JSON download
+- Each cycle has its own database writer thread that manages the session lifecycle
 
 **JSON Generation:**
-- **On-demand** generation (not during processing)
+- On-demand generation (not during processing)
 - Queries database by session_id to retrieve snapshots
 - Generates newline-delimited JSON format
 - Served via HTTP endpoint with session-specific download
 
-### Performance Optimizations
+### Performance Features
 
-1. **PostgreSQL COPY commands**: Bulk data loading using COPY instead of individual INSERTs for maximum throughput
+1. **PostgreSQL COPY commands**: Bulk data loading using COPY for maximum throughput
 2. **Index management**: Drop indexes before bulk load, recreate after - significantly faster than maintaining indexes during inserts
 3. **Lock-free ring buffer delegation**: Processing thread never blocks on database I/O - delegates writes to dedicated DB thread via lock-free SPSC queue
 4. **Cache-line alignment**: Ring buffer read/write positions on separate 64-byte cache lines to prevent false sharing
@@ -250,6 +270,8 @@ The key architectural pattern is **delegation via ring buffer**:
 10. **Power-of-2 ring buffer**: Fast modulo via bitmask, no division operations
 11. **Memory fences**: Proper synchronization between processing and DB threads using `std::atomic_thread_fence`
 12. **C++20 jthread**: Both processing and database writer threads use `std::jthread` for modern thread management with stop tokens
+13. **Per-cycle thread spawning**: Database writer thread spawned per-cycle for clean session management and resource cleanup
+14. **Stored processing thread**: Processing thread stored in `std::optional<std::jthread>` for proper lifecycle management
 
 ### Order Book Snapshot Format
 

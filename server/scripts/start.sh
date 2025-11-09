@@ -31,6 +31,7 @@ if [[ "$MODE" == "build" ]]; then
     
     # Step 1: Clone and build databento-cpp
     echo "[1/5] Setting up databento-cpp..."
+    mkdir -p thirdparty
     cd thirdparty
     
     if [ ! -d "databento-cpp" ]; then
@@ -70,27 +71,33 @@ if [[ "$MODE" == "build" ]]; then
     
     cd "$SCRIPT_DIR/.."
     
-    # Step 2: Build uSockets (required by uWebSockets)
-    echo "[2/5] Building uSockets..."
-    cd thirdparty/uWebSockets
+    # Step 2: Clone uWebSockets (includes uSockets submodule)
+    echo "[2/5] Setting up uWebSockets..."
+    cd thirdparty
     
-    # Check if uSockets submodule exists, if not clone it
-    if [ ! -d "uSockets" ] || [ -z "$(ls -A uSockets 2>/dev/null)" ]; then
-        echo "  Cloning uSockets submodule..."
-        if [ -f ".gitmodules" ]; then
+    # Clone uWebSockets with submodules if it doesn't exist
+    if [ ! -d "uWebSockets" ] || [ -z "$(ls -A uWebSockets 2>/dev/null)" ]; then
+        echo "  Cloning uWebSockets..."
+        git clone --recursive https://github.com/uNetworking/uWebSockets.git > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "✗ Failed to clone uWebSockets"
+            exit 1
+        fi
+    else
+        # If uWebSockets exists but uSockets submodule is missing, initialize it
+        cd uWebSockets
+        if [ ! -d "uSockets" ] || [ -z "$(ls -A uSockets 2>/dev/null)" ]; then
+            echo "  Initializing uSockets submodule..."
             git submodule update --init --recursive > /dev/null 2>&1
-        else
-            # If not a git submodule, clone directly
-            if [ ! -d "uSockets" ]; then
-                git clone https://github.com/uNetworking/uSockets.git uSockets > /dev/null 2>&1
+            if [ $? -ne 0 ]; then
+                echo "  Warning: Could not initialize uSockets submodule"
+                echo "  Please run: cd thirdparty/uWebSockets && git submodule update --init --recursive"
             fi
         fi
-        if [ $? -ne 0 ] || [ ! -d "uSockets" ] || [ -z "$(ls -A uSockets 2>/dev/null)" ]; then
-            echo "  Warning: Could not clone uSockets automatically"
-            echo "  Please run: cd thirdparty/uWebSockets && git clone https://github.com/uNetworking/uSockets.git uSockets"
-            echo "  Or: cd thirdparty/uWebSockets && git submodule update --init --recursive"
-        fi
+        cd ..
     fi
+    
+    cd uWebSockets
     
     # Build uSockets with OpenSSL support
     if [ -d "uSockets" ]; then
@@ -374,3 +381,4 @@ echo ""
 
 # Run the WebSocket server
 ./apps/websocket_server
+
