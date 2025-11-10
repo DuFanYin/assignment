@@ -40,7 +40,6 @@ class WebSocketServer {
 public:
     WebSocketServer(int port, const PostgresConnection::Config& dbConfig,
                     size_t topLevels = 10,
-                    bool outputFullBook = true,
                     size_t ringBufferSize = 65536);
     ~WebSocketServer();
     
@@ -87,7 +86,6 @@ private:
     std::string symbol_;
     std::string activeSessionId_;  // Cached session ID - avoid touching databaseWriter_ from hot path
     size_t topLevels_;
-    bool outputFullBook_;
     
     // Processing thread timing
     std::chrono::steady_clock::time_point processingStartTime_;

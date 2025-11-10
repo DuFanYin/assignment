@@ -1,16 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <cstdint>
-#include <databento/constants.hpp>  // dataset, kUndefPrice
-#include <databento/datetime.hpp>   // ToIso8601, UnixNanos
+#include <databento/constants.hpp>  // kUndefPrice
 #include <databento/dbn_file_store.hpp>
 #include <databento/enums.hpp>  // Action, Side
-#include <databento/flag_set.hpp>
-#include <databento/historical.hpp>  // HistoricalBuilder
 #include <databento/pretty.hpp>      // Px
 #include <databento/record.hpp>      // BidAskPair, MboMsg, Record
-#include <databento/symbol_map.hpp>  // TsSymbolMap
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -45,7 +40,6 @@ class Book {
   // Configuration
   void setSymbol(const std::string& symbol) { symbol_ = symbol; }
   void setTopLevels(size_t levels) { topLevels_ = levels; }
-  void setOutputFullBook(bool output) { outputFullBook_ = output; }
   
   std::pair<PriceLevel, PriceLevel> Bbo() const {
     return {GetBidLevel(), GetAskLevel()};
@@ -191,9 +185,6 @@ class Book {
   // Configuration
   std::string symbol_;
   size_t topLevels_;
-  bool outputFullBook_;
-
- private:
   using LevelOrders = std::vector<db::MboMsg>;
   struct PriceAndSide {
     int64_t price;

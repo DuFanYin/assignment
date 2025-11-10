@@ -24,7 +24,6 @@ namespace db = databento;
 
 WebSocketServer::WebSocketServer(int port, const PostgresConnection::Config& dbConfig,
                                   size_t topLevels,
-                                  bool outputFullBook,
                                   size_t ringBufferSize)
     : port_(port)
     , databaseConfig_(dbConfig)
@@ -35,7 +34,6 @@ WebSocketServer::WebSocketServer(int port, const PostgresConnection::Config& dbC
     , snapshotRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(ringBufferSize))
     , symbol_("")  // Will be extracted from DBN file
     , topLevels_(topLevels)
-    , outputFullBook_(outputFullBook)
     , processingMessagesReceived_(0)
     , processingOrdersProcessed_(0)
     , processingTotalTimeNs_(0)
@@ -45,7 +43,6 @@ WebSocketServer::WebSocketServer(int port, const PostgresConnection::Config& dbC
 {
     // Initialize order book (symbol will be set from DBN file metadata)
     orderBook_->setTopLevels(topLevels_);
-    orderBook_->setOutputFullBook(outputFullBook_);
     
     // Initialize timing reservoir
     processingTimingReservoir_.reserve(kTimingReservoirSize);
