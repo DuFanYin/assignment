@@ -9,6 +9,7 @@
 #include <functional>
 #include <random>
 #include <optional>
+#include <fstream>
 #include "project/order_book.hpp"
 #include "project/ring_buffer.hpp"
 #include "project/book_snapshot.hpp"
@@ -52,19 +53,23 @@ public:
     size_t getBytesReceived() const { return totalBytesReceived_; }
     
     struct PerSocketData {
-        std::vector<uint8_t> buffer;
-        size_t totalBytesReceived = 0;
+        // Upload state
+        size_t totalBytesReceived = 0;      // global counter across sockets (stats)
+        size_t bytesReceived = 0;            // per-connection bytes received
         bool isMetadataReceived = false;
         std::string fileName;
         size_t fileSize = 0;
-        std::string tempFilePath;
         bool isProcessingStarted = false;
         std::function<void(const std::string&)> sendMessage; // Callback to send messages
+        
+        // In-memory DBN buffer (no temp file!)
+        std::vector<uint8_t> dbnBuffer;
+        size_t lastProgressUpdate = 0;      // Track last progress update size
     };
     
 private:
-    void processDbnChunk(const std::vector<uint8_t>& chunk, PerSocketData* socketData, 
-                        const std::function<void(const std::string&)>& sendMessage = nullptr);
+    void processDbnFromMemory(const std::vector<uint8_t>& dbnData, 
+                              const std::function<void(const std::string&)>& sendMessage = nullptr);
     void databaseWriterLoop(std::stop_token stopToken);
     
     int port_;
@@ -90,6 +95,10 @@ private:
     // Processing thread timing
     std::chrono::steady_clock::time_point processingStartTime_;
     std::chrono::steady_clock::time_point processingEndTime_;
+    std::chrono::steady_clock::time_point uploadStartTime_;
+    std::chrono::steady_clock::time_point uploadEndTime_;
+    std::chrono::steady_clock::time_point dbStartTime_;
+    std::chrono::steady_clock::time_point dbEndTime_;
     
     // Processing thread statistics (same as receiver version)
     std::atomic<size_t> processingMessagesReceived_;
@@ -110,17 +119,21 @@ private:
     
     // Statistics getters (same as receiver version)
     double getThroughput() const;
+    double getOrderThroughput() const;
     double getAverageOrderProcessNs() const;
     uint64_t getP99OrderProcessNs() const;
+    double getDbThroughput() const { return dbThroughput_; }
+    // Upload-only throughput helpers
+    double getUploadThroughputMsgs() const;   // chunks/sec
     
     // Helper function to start processing thread
-    void startProcessingThread(const std::string& tempFilePath, const std::function<void(const std::string&)>& sendMessage);
+    void startProcessingThread(std::vector<uint8_t>&& dbnData, const std::function<void(const std::string&)>& sendMessage);
     
     // Session stats captured atomically to pass to DB thread
     struct SessionStats {
         size_t messagesReceived = 0;
         size_t ordersProcessed = 0;
-        double throughput = 0.0;
+        double throughput = 0.0;            // total throughput (upload -> DB complete)
         int64_t avgProcessNs = 0;
         uint64_t p99ProcessNs = 0;
         size_t totalOrders = 0;
@@ -132,5 +145,9 @@ private:
         bool hasBookState = false;
     };
     SessionStats sessionStats_;
+    
+    double dbThroughput_{0.0};
+    
+    // Upload metrics
 };
 

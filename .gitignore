@@ -116,3 +116,5 @@ gmon.out
 # Core dumps
 src/data/order_book_output.json
 *.json
+
+thirdparty/

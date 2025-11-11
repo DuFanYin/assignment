@@ -1,20 +1,20 @@
 #!/bin/bash
 
 # WebSocket Server - Build and Run Script
-# Usage: ./start.sh [build|run|clean|build_clean]
+# Usage: ./start.sh [build|run|clean|all]
 #   build:       Build databento-cpp, uWebSockets/uSockets, and the project
 #   run:         Run the WebSocket server (default, assumes build already exists)
 #   clean:       Wipe the database (drop and recreate all tables)
-#   build_clean: Build project then clean database
+#   all:         Build project, clean database, and run server
 
 MODE=${1:-run}
 
-if [[ "$MODE" != "build" && "$MODE" != "run" && "$MODE" != "clean" && "$MODE" != "build_clean" ]]; then
-    echo "Usage: $0 [build|run|clean|build_clean]"
+if [[ "$MODE" != "build" && "$MODE" != "run" && "$MODE" != "clean" && "$MODE" != "all" ]]; then
+    echo "Usage: $0 [build|run|clean|all]"
     echo "  build:       Build databento-cpp, uWebSockets/uSockets, and the project"
     echo "  run:         Run the WebSocket server (default, assumes build already exists)"
     echo "  clean:       Wipe the database (drop and recreate all tables)"
-    echo "  build_clean: Build project then clean database"
+    echo "  all:         Build project, clean database, and run server"
     exit 1
 fi
 
@@ -237,8 +237,6 @@ if [[ "$MODE" == "clean" ]]; then
     # Drop all tables
     echo "  Dropping tables..."
     psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" << EOF > /dev/null 2>&1
-DROP TABLE IF EXISTS ask_levels CASCADE;
-DROP TABLE IF EXISTS bid_levels CASCADE;
 DROP TABLE IF EXISTS order_book_snapshots CASCADE;
 DROP TABLE IF EXISTS processing_sessions CASCADE;
 EOF
@@ -272,17 +270,17 @@ EOF
     exit 0
 fi
 
-# BUILD_CLEAN MODE: Build then clean database
-if [[ "$MODE" == "build_clean" ]]; then
+# ALL MODE: Build, clean database, and run server
+if [[ "$MODE" == "all" ]]; then
     echo "=========================================="
-    echo "WebSocket Server - Build + Clean"
+    echo "WebSocket Server - Build + Clean + Run"
     echo "=========================================="
     echo ""
     
     # First run build
     "$0" build
     if [ $? -ne 0 ]; then
-        echo "✗ Build failed, skipping clean"
+        echo "✗ Build failed, skipping clean and run"
         exit 1
     fi
     
@@ -292,7 +290,18 @@ if [[ "$MODE" == "build_clean" ]]; then
     
     # Then run clean
     "$0" clean
-    exit $?
+    if [ $? -ne 0 ]; then
+        echo "✗ Database clean failed, skipping run"
+        exit 1
+    fi
+    
+    echo ""
+    echo "Database cleaned, now starting server..."
+    echo ""
+    
+    # Finally run the server
+    MODE="run"
+    # Fall through to RUN MODE below
 fi
 
 # RUN MODE: Run the WebSocket server

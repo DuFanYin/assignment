@@ -52,7 +52,7 @@ public:
     QueryResult executePrepared(const std::string& stmtName, const std::vector<std::string>& params);
     
     // COPY command support for bulk loading
-    bool beginCopy(const std::string& tableName, const std::vector<std::string>& columns);
+    bool beginCopyBinary(const std::string& tableName, const std::vector<std::string>& columns);
     bool putCopyData(const std::string& data);
     bool endCopy();
     

@@ -5,207 +5,240 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DBN File Upload & Processing</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 700px;
-            margin: 30px auto;
-            padding: 15px;
-            background-color: #000;
-        }
-        .container {
-            background: #000;
-            padding: 20px;
-            border: 1px solid #333;
-            border-radius: 4px;
-        }
-        h1 {
-            color: #fff;
-            margin-bottom: 20px;
-            font-size: 1.5rem;
-        }
-        .upload-area {
-            border: 2px dashed #666;
-            border-radius: 4px;
-            padding: 30px;
-            text-align: center;
-            margin-bottom: 15px;
-            background: #000;
-            color: #fff;
-        }
-        .upload-area.dragover {
-            border-color: #fff;
-            background-color: #111;
-        }
-        input[type="file"] {
-            display: none;
-        }
-        .file-label {
-            display: inline-block;
-            padding: 10px 20px;
-            background-color: #fff;
-            color: #000;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .file-label:hover {
-            background-color: #ccc;
-        }
-        .status {
-            margin-top: 15px;
-            padding: 10px;
-            border-radius: 4px;
-            display: none;
-            font-size: 14px;
-            border: 1px solid #333;
-        }
-        .status.info {
-            background-color: #000;
-            color: #fff;
-            display: block;
-        }
-        .status.success {
-            background-color: #000;
-            color: #fff;
-            display: block;
-        }
-        .status.error {
-            background-color: #000;
-            color: #fff;
-            border-color: #fff;
-            display: block;
-        }
-        .progress {
-            margin-top: 15px;
-            width: 100%;
-            height: 24px;
-            background-color: #333;
-            border-radius: 4px;
-            overflow: hidden;
-            display: none;
-            border: 1px solid #666;
-        }
-        .progress-bar {
-            height: 100%;
-            background-color: #fff;
-            width: 0%;
-            transition: width 0.3s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #000;
-            font-weight: bold;
-            font-size: 12px;
-        }
-        .notes-section {
-            margin-top: 15px;
-            padding: 12px;
-            background-color: #111;
-            border: 1px solid #333;
-            border-radius: 4px;
-            display: none;
-            color: #fff;
-            font-size: 12px;
-            font-family: Arial, sans-serif;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .notes-section.show {
-            display: block;
-        }
-        .stats {
-            margin-top: 15px;
-            padding: 15px;
-            background-color: #000;
-            border-radius: 4px;
-            display: none;
-            border: 1px solid #333;
-            color: #fff;
-        }
-        .stats.show {
-            display: block;
-        }
-        .stat-item {
-            margin: 6px 0;
-            font-size: 13px;
-            color: #fff;
-        }
-        .download-section {
-            margin-top: 20px;
-            padding: 15px;
-            background: #000;
-            border: 1px solid #333;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .download-button {
-            padding: 10px 30px;
-            background-color: #fff;
-            color: #000;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: bold;
-            transition: background-color 0.2s;
-        }
-        .download-button:hover:not(:disabled) {
-            background-color: #ccc;
-        }
-        .download-button:disabled {
-            background-color: #666;
-            cursor: wait;
-        }
-        .download-button.loading {
-            position: relative;
-            color: transparent;
-        }
-        .download-button.loading::after {
-            content: '';
-            position: absolute;
-            width: 16px;
-            height: 16px;
-            top: 50%;
-            left: 50%;
-            margin-left: -8px;
-            margin-top: -8px;
-            border: 2px solid #000;
-            border-radius: 50%;
-            border-top-color: transparent;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .session-id {
-            color: #fff;
-            font-size: 12px;
-            margin-bottom: 10px;
-            font-family: 'Courier New', monospace;
-        }
-        button {
-            padding: 10px 20px;
-            background-color: #fff;
-            color: #000;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-top: 10px;
-            margin-right: 5px;
-        }
-        button:hover:not(:disabled) {
-            background-color: #ccc;
-        }
-        button:disabled {
-            background-color: #666;
-            cursor: not-allowed;
-        }
-        #fileName {
-            margin-top: 8px;
-            font-size: 12px;
-            color: #fff;
-        }
+body {
+    font-family: Arial, sans-serif;
+    max-width: 700px;
+    margin: 30px auto;
+    padding: 15px;
+    background-color: #000;
+}
+.container {
+    background: #000;
+    padding: 20px;
+    border: 1px solid #333;
+    border-radius: 4px;
+}
+h1 {
+    color: #fff;
+    margin-bottom: 20px;
+    font-size: 1.5rem;
+}
+.upload-area {
+    border: 2px dashed #666;
+    border-radius: 4px;
+    padding: 30px;
+    text-align: center;
+    margin-bottom: 15px;
+    background: #000;
+    color: #fff;
+}
+.upload-area.dragover {
+    border-color: #fff;
+    background-color: #111;
+}
+input[type="file"] {
+    display: none;
+}
+.file-label {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #fff;
+    color: #000;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+.file-label:hover {
+    background-color: #ccc;
+}
+.status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 4px;
+    display: none;
+    font-size: 14px;
+    border: 1px solid #333;
+}
+.status.info {
+    background-color: #000;
+    color: #fff;
+    display: block;
+}
+.status.success {
+    background-color: #000;
+    color: #fff;
+    display: block;
+}
+.status.error {
+    background-color: #000;
+    color: #fff;
+    border-color: #fff;
+    display: block;
+}
+.progress {
+    margin-top: 15px;
+    width: 100%;
+    height: 24px;
+    background-color: #333;
+    border-radius: 4px;
+    overflow: hidden;
+    display: none;
+    border: 1px solid #666;
+}
+.progress-bar {
+    height: 100%;
+    background-color: #fff;
+    width: 0%;
+    transition: width 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #000;
+    font-weight: bold;
+    font-size: 12px;
+}
+.notes-section {
+    margin-top: 15px;
+    padding: 12px;
+    background-color: #111;
+    border: 1px solid #333;
+    border-radius: 4px;
+    display: none;
+    color: #fff;
+    font-size: 12px;
+    font-family: Arial, sans-serif;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.notes-section.show {
+    display: block;
+}
+.stats {
+    margin-top: 15px;
+    padding: 15px;
+    background-color: #000;
+    border-radius: 4px;
+    display: none;
+    border: 1px solid #333;
+    color: #fff;
+}
+.stats.show {
+    display: block;
+}
+.stat-item {
+    margin: 6px 0;
+    font-size: 13px;
+    color: #fff;
+}
+.download-section {
+    margin-top: 20px;
+    padding: 15px;
+    background: #000;
+    border: 1px solid #333;
+    border-radius: 4px;
+    text-align: center;
+}
+.download-button {
+    padding: 10px 30px;
+    background-color: #fff;
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.2s;
+}
+.download-button:hover:not(:disabled) {
+    background-color: #ccc;
+}
+.download-button:disabled {
+    background-color: #666;
+    cursor: wait;
+}
+.download-button.loading {
+    position: relative;
+    color: transparent;
+}
+.download-button.loading::after {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    top: 50%;
+    left: 50%;
+    margin-left: -8px;
+    margin-top: -8px;
+    border: 2px solid #000;
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+.session-id {
+    color: #fff;
+    font-size: 12px;
+    margin-bottom: 10px;
+    font-family: 'Courier New', monospace;
+}
+button {
+    padding: 10px 20px;
+    background-color: #fff;
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-top: 10px;
+    margin-right: 5px;
+}
+button:hover:not(:disabled) {
+    background-color: #ccc;
+}
+button:disabled {
+    background-color: #666;
+    cursor: not-allowed;
+}
+#fileName {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #fff;
+}
+/* Extracted styles for statistics rendering */
+.section {
+    margin-bottom: 20px;
+}
+.section--summary {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 2px solid #333;
+}
+.section-title {
+    margin: 0 0 10px 0;
+    font-size: 0.95rem;
+    font-weight: bold;
+    color: #fff;
+}
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.row {
+    border-bottom: 1px solid #333;
+}
+.cell-label {
+    padding: 8px;
+    color: #fff;
+}
+.cell-value {
+    padding: 8px;
+    text-align: right;
+    color: #fff;
+    font-weight: bold;
+}
     </style>
 </head>
 <body>
@@ -227,7 +260,6 @@
         
         <button id="uploadBtn" disabled>Upload & Process</button>
         
-        <div class="notes-section" id="notesSection">Metrics only account for file streaming and order processing time; they do not account for the time taken to write data into the database.</div>
         
         <div class="stats" id="stats">
             <h3>Processing Statistics</h3>
@@ -317,32 +349,38 @@
             
             ws.onopen = () => {
                 showStatus('Connected to server. Starting upload...', 'info');
-                document.getElementById('notesSection').classList.add('show');
+                const notesEl = document.getElementById('notesSection');
+                if (notesEl) {
+                    notesEl.classList.add('show');
+                }
                 stats.classList.add('show');
                 document.getElementById('statConnection').textContent = 'Connected';
                 uploadBtn.disabled = true;
                 progress.style.display = 'block';
                 
-                // Send file metadata first
-                const metadata = {
-                    type: 'metadata',
-                    fileName: file.name,
-                    fileSize: file.size
-                };
-                ws.send(JSON.stringify(metadata));
+                // Send file metadata as BINARY (no JSON serialization overhead)
+                // Format: [1 byte type='M'][4 bytes fileSize][N bytes fileName UTF-8]
+                const fileNameBytes = new TextEncoder().encode(file.name);
+                const metadataBuffer = new ArrayBuffer(1 + 4 + fileNameBytes.length);
+                const metadataView = new DataView(metadataBuffer);
+                const metadataU8 = new Uint8Array(metadataBuffer);
                 
-                // Start sending chunks
-                sendNextChunk();
+                metadataView.setUint8(0, 0x4D); // 'M' for metadata
+                metadataView.setUint32(1, file.size, false); // Big-endian file size
+                metadataU8.set(fileNameBytes, 5); // Copy filename bytes
+                
+                ws.send(metadataBuffer);
+                
+                // Start sending chunks immediately (no response needed)
+                setTimeout(sendNextChunk, 10);
             };
             
             ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     
-                    if (message.type === 'progress') {
-                        updateProgress(message.bytesReceived, file.size);
-                        document.getElementById('statBytes').textContent = formatBytes(message.bytesReceived);
-                    } else if (message.type === 'info') {
+                    // No 'progress' messages from server anymore (handled locally)
+                    if (message.type === 'info') {
                         showStatus(message.message || 'Info', 'info');
                     } else if (message.type === 'stats') {
                         messagesProcessed = message.messagesProcessed || 0;
@@ -402,14 +440,15 @@
                     ws.send(e.target.result);
                     currentOffset = end;
                     
+                    // Update progress locally (no server round-trip needed)
+                    updateProgress(currentOffset, file.size);
+                    document.getElementById('statBytes').textContent = formatBytes(currentOffset);
+                    
                     if (currentOffset < file.size) {
                         // Send next chunk after a small delay to avoid overwhelming
                         setTimeout(sendNextChunk, 10);
-                    } else {
-                        // Send completion signal
-                        const complete = { type: 'complete' };
-                        ws.send(JSON.stringify(complete));
                     }
+                    // No completion signal needed - server detects when bytesReceived >= fileSize
                 }
             };
             
@@ -448,40 +487,50 @@
             let statsHTML = '';
             
             // Processing metrics section
-            statsHTML += '<div style="margin-bottom: 20px;">';
-            statsHTML += '<h4 style="margin: 0 0 10px 0; font-size: 0.95rem; font-weight: bold; color: #fff;">Processing Metrics</h4>';
-            statsHTML += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+            statsHTML += '<div class="section">';
+            statsHTML += '<h4 class="section-title">Processing Metrics</h4>';
+            statsHTML += '<table class="stats-table">';
             
-            statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Messages Received:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${(message.messagesReceived || 0).toLocaleString()}</td></tr>`;
-            statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Orders Processed:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${(message.ordersProcessed || 0).toLocaleString()}</td></tr>`;
-            
-            if (message.messageThroughput) {
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Message Throughput:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.messageThroughput.toFixed(0)} msg/s</td></tr>`;
+            statsHTML += `<tr class="row"><td class="cell-label"><strong>Messages Received:</strong></td><td class="cell-value">${(message.messagesReceived || 0).toLocaleString()}</td></tr>`;
+            statsHTML += `<tr class="row"><td class="cell-label"><strong>Orders Processed:</strong></td><td class="cell-value">${(message.ordersProcessed || 0).toLocaleString()}</td></tr>`;
+            if (message.totalThroughput) {
+                const totalDur = (typeof message.totalDurationSec === 'number') ? ` (${message.totalDurationSec.toFixed(2)} s)` : '';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Total Throughput (entire session):</strong></td><td class="cell-value">${message.totalThroughput.toFixed(0)} msg/s${totalDur}</td></tr>`;
+            }
+            if (message.uploadThroughputMsgs) {
+                const uploadDur = (typeof message.uploadDurationSec === 'number') ? ` (${message.uploadDurationSec.toFixed(2)} s)` : '';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Upload Throughput (Network I/O speed):</strong></td><td class="cell-value">${message.uploadThroughputMsgs.toFixed(0)} msgs/s${uploadDur}</td></tr>`;
+            }
+            if (message.orderThroughput) {
+                const procDur = (typeof message.processingDurationSec === 'number') ? ` (${message.processingDurationSec.toFixed(2)} s)` : '';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Order Throughput (order processing speed):</strong></td><td class="cell-value">${message.orderThroughput.toFixed(0)} orders/s${procDur}</td></tr>`;
+            }
+            if (message.dbThroughput) {
+                const dbDur = (typeof message.dbDurationSec === 'number') ? ` (${message.dbDurationSec.toFixed(2)} s)` : '';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>DB Throughput (file I/O speed):</strong></td><td class="cell-value">${message.dbThroughput.toFixed(0)} items/s${dbDur}</td></tr>`;
             }
             if (message.averageOrderProcessNs) {
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Avg Process Time:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.averageOrderProcessNs.toFixed(0)} ns</td></tr>`;
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Avg Process Time:</strong></td><td class="cell-value">${message.averageOrderProcessNs.toFixed(0)} ns</td></tr>`;
             }
             if (message.p99OrderProcessNs) {
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>P99 Process Time:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.p99OrderProcessNs.toLocaleString()} ns</td></tr>`;
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>P99 Process Time:</strong></td><td class="cell-value">${message.p99OrderProcessNs.toLocaleString()} ns</td></tr>`;
             }
-            if (message.orderProcessingRate) {
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Order Processing Rate:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.orderProcessingRate.toFixed(0)} orders/s</td></tr>`;
-            }
+            // removed upload time per chunk
             statsHTML += '</table></div>';
             
             // Order book summary
             if (message.activeOrders !== undefined) {
-                statsHTML += '<div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #333;">';
-                statsHTML += '<h4 style="margin: 0 0 10px 0; font-size: 0.95rem; font-weight: bold; color: #fff;">Final Order Book Summary</h4>';
-                statsHTML += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Active Orders:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.activeOrders.toLocaleString()}</td></tr>`;
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Bid Levels:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.bidPriceLevels}</td></tr>`;
-                statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Ask Levels:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.askPriceLevels}</td></tr>`;
+                statsHTML += '<div class="section section--summary">';
+                statsHTML += '<h4 class="section-title">Final Order Book Summary</h4>';
+                statsHTML += '<table class="stats-table">';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Active Orders:</strong></td><td class="cell-value">${message.activeOrders.toLocaleString()}</td></tr>`;
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Bid Levels:</strong></td><td class="cell-value">${message.bidPriceLevels}</td></tr>`;
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Ask Levels:</strong></td><td class="cell-value">${message.askPriceLevels}</td></tr>`;
                 
                 if (message.bestBid !== undefined && message.bestAsk !== undefined) {
-                    statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Best Bid:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.bestBid.toFixed(2)} @ ${message.bestBidSize} (${message.bestBidCount} orders)</td></tr>`;
-                    statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Best Ask:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.bestAsk.toFixed(2)} @ ${message.bestAskSize} (${message.bestAskCount} orders)</td></tr>`;
-                    statsHTML += `<tr style="border-bottom: 1px solid #333;"><td style="padding: 8px; color: #fff;"><strong>Spread:</strong></td><td style="padding: 8px; text-align: right; color: #fff; font-weight: bold;">${message.bidAskSpread.toFixed(2)}</td></tr>`;
+                    statsHTML += `<tr class="row"><td class="cell-label"><strong>Best Bid:</strong></td><td class="cell-value">${message.bestBid.toFixed(2)} @ ${message.bestBidSize} (${message.bestBidCount} orders)</td></tr>`;
+                    statsHTML += `<tr class="row"><td class="cell-label"><strong>Best Ask:</strong></td><td class="cell-value">${message.bestAsk.toFixed(2)} @ ${message.bestAskSize} (${message.bestAskCount} orders)</td></tr>`;
+                    statsHTML += `<tr class="row"><td class="cell-label"><strong>Spread:</strong></td><td class="cell-value">${message.bidAskSpread.toFixed(2)}</td></tr>`;
                 }
                 statsHTML += '</table></div>';
             }

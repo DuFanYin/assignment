@@ -228,7 +228,7 @@ PostgresConnection::QueryResult PostgresConnection::executePrepared(const std::s
     return result;
 }
 
-bool PostgresConnection::beginCopy(const std::string& tableName, const std::vector<std::string>& columns) {
+bool PostgresConnection::beginCopyBinary(const std::string& tableName, const std::vector<std::string>& columns) {
     if (!checkConnection()) {
         return false;
     }
@@ -239,7 +239,7 @@ bool PostgresConnection::beginCopy(const std::string& tableName, const std::vect
         if (i > 0) ss << ", ";
         ss << columns[i];
     }
-    ss << ") FROM STDIN WITH (FORMAT csv, DELIMITER '\t')";
+    ss << ") FROM STDIN WITH (FORMAT binary)";
     
     PGresult* result = PQexec(connection_, ss.str().c_str());
     bool success = PQresultStatus(result) == PGRES_COPY_IN;

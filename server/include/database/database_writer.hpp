@@ -39,10 +39,6 @@ private:
     std::atomic<bool> isSessionActive_{false};
     std::atomic<size_t> totalSnapshotsWritten_{0};
     
-    // Prepared statements
-    bool prepareStatements();
-    void clearPreparedStatements();
-    
     // Helper functions
     std::string generateSessionId() const;
     bool insertSession(const std::string& symbol, const std::string& fileName, size_t fileSize);

@@ -81,12 +81,14 @@ bool WebSocketServer::start() {
         .upgrade = nullptr,
         .open = [this](auto *ws) {
             auto *data = ws->getUserData();
-            data->buffer.clear();
             data->totalBytesReceived = 0;
+            data->bytesReceived = 0;
             data->isMetadataReceived = false;
             data->fileName.clear();
             data->fileSize = 0;
             data->isProcessingStarted = false;
+            data->dbnBuffer.clear();
+            data->lastProgressUpdate = 0;
             
             // Store callback to send messages from processing thread
             data->sendMessage = [ws](const std::string& message) {
@@ -102,42 +104,33 @@ bool WebSocketServer::start() {
         .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
             auto *data = ws->getUserData();
             
-            if (opCode == uWS::OpCode::TEXT) {
-                // Handle JSON metadata
-                try {
-                    auto json = nlohmann::json::parse(message);
-                    if (json.contains("type") && json["type"] == "metadata") {
-                        data->isMetadataReceived = true;
-                        data->fileName = json.value("fileName", "");
-                        data->fileSize = json.value("fileSize", 0);
-                        
-                        // Create temporary file for DBN data
-                        std::filesystem::path tempDir = std::filesystem::temp_directory_path();
-                        data->tempFilePath = (tempDir / ("dbn_upload_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dbn")).string();
-                        
-                        // Open temp file for writing
-                        std::ofstream tempFile(data->tempFilePath, std::ios::binary);
-                        if (!tempFile.is_open()) {
-                            nlohmann::json error;
-                            error["type"] = "error";
-                            error["error"] = "Failed to create temporary file";
-                            ws->send(error.dump(), uWS::OpCode::TEXT, false);
-                            return;
-                        }
-                        tempFile.close();
-                        
-                        nlohmann::json response;
-                        response["type"] = "metadata_received";
-                        response["message"] = "Ready to receive file data";
-                        ws->send(response.dump(), uWS::OpCode::TEXT, false);
-                    }
-                } catch (const std::exception& e) {
-                    nlohmann::json error;
-                    error["type"] = "error";
-                    error["error"] = "Failed to parse metadata: " + std::string(e.what());
-                    ws->send(error.dump(), uWS::OpCode::TEXT, false);
+            if (opCode == uWS::OpCode::BINARY) {
+                // Check if this is binary metadata (first byte = 'M')
+                if (!data->isMetadataReceived && message.size() >= 5 && 
+                    static_cast<uint8_t>(message[0]) == 0x4D) {
+                    // Parse binary metadata: [1 byte 'M'][4 bytes fileSize][N bytes fileName]
+                    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(message.data());
+                    data->fileSize = (static_cast<uint32_t>(bytes[1]) << 24) |
+                                    (static_cast<uint32_t>(bytes[2]) << 16) |
+                                    (static_cast<uint32_t>(bytes[3]) << 8) |
+                                    static_cast<uint32_t>(bytes[4]);
+                    data->fileName = std::string(message.data() + 5, message.size() - 5);
+                    data->isMetadataReceived = true;
+                    
+                    // Mark upload start time
+                    uploadStartTime_ = std::chrono::steady_clock::now();
+                    uploadEndTime_ = {};
+                    
+                    // Pre-allocate in-memory buffer (no temp file!)
+                    data->dbnBuffer.clear();
+                    data->dbnBuffer.reserve(data->fileSize);
+                    data->bytesReceived = 0;
+                    data->lastProgressUpdate = 0;
+                    
+                    // No response needed - client starts sending immediately
+                    return;
                 }
-            } else if (opCode == uWS::OpCode::BINARY) {
+                
                 // Handle binary DBN data
                 if (!data->isMetadataReceived) {
                     nlohmann::json error;
@@ -147,27 +140,18 @@ bool WebSocketServer::start() {
                     return;
                 }
                 
-                // Append to buffer and write to temp file
-                std::vector<uint8_t> chunk(message.begin(), message.end());
-                data->buffer.insert(data->buffer.end(), chunk.begin(), chunk.end());
-                totalBytesReceived_ += chunk.size();
+                // Append chunk to in-memory buffer (no disk I/O!)
+                data->dbnBuffer.insert(data->dbnBuffer.end(), message.begin(), message.end());
+                data->bytesReceived += message.size();
+                totalBytesReceived_ += message.size();
                 
-                // Write chunk to temp file
-                std::ofstream tempFile(data->tempFilePath, std::ios::binary | std::ios::app);
-                if (tempFile.is_open()) {
-                    tempFile.write(reinterpret_cast<const char*>(chunk.data()), chunk.size());
-                    tempFile.close();
-                }
-                
-                // Send progress update
-                nlohmann::json progress;
-                progress["type"] = "progress";
-                progress["bytesReceived"] = data->buffer.size();
-                progress["fileSize"] = data->fileSize;
-                ws->send(progress.dump(), uWS::OpCode::TEXT, false);
+                // No progress updates during upload (reduces WebSocket overhead)
+                // Frontend can calculate progress locally based on chunks sent
                 
                 // Check if file upload is complete and automatically start processing
-                if (!data->isProcessingStarted && data->buffer.size() >= data->fileSize && data->fileSize > 0) {
+                if (!data->isProcessingStarted && data->bytesReceived >= data->fileSize && data->fileSize > 0) {
+                    // Mark upload end time
+                    uploadEndTime_ = std::chrono::steady_clock::now();
                     data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
                     
                     // Send status update
@@ -177,8 +161,8 @@ bool WebSocketServer::start() {
                     status["messagesProcessed"] = 0;
                     ws->send(status.dump(), uWS::OpCode::TEXT, false);
                     
-                    // Start processing
-                    startProcessingThread(data->tempFilePath, data->sendMessage);
+                    // Start processing (move buffer ownership to processing thread)
+                    startProcessingThread(std::move(data->dbnBuffer), data->sendMessage);
                 }
             }
         },
@@ -187,18 +171,12 @@ bool WebSocketServer::start() {
             
             // Safety fallback: Process any remaining data if not already processing
             // (This should rarely trigger since processing auto-starts when upload completes)
-            if (!data->isProcessingStarted && !data->tempFilePath.empty() && std::filesystem::exists(data->tempFilePath)) {
-                    data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
-                    startProcessingThread(data->tempFilePath, data->sendMessage);
+            if (!data->isProcessingStarted && !data->dbnBuffer.empty() && data->fileSize > 0) {
+                data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
+                startProcessingThread(std::move(data->dbnBuffer), data->sendMessage);
             }
             
-            // Clean up temp file after a delay (to allow processing to complete)
-            if (!data->tempFilePath.empty()) {
-                std::thread([tempPath = data->tempFilePath]() {
-                    std::this_thread::sleep_for(kTempFileCleanupDelay);
-                    std::filesystem::remove(tempPath);
-                }).detach();
-            }
+            // No temp file cleanup needed - all in memory!
         }
     }).get("/status/:session_id", [this](auto *res, auto *req) {
         // Check if session is complete
@@ -283,15 +261,30 @@ bool WebSocketServer::start() {
     return true;
 }
 
-void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, PerSocketData* socketData,
-                                      const std::function<void(const std::string&)>& sendMessage) {
-    if (socketData->tempFilePath.empty() || !std::filesystem::exists(socketData->tempFilePath)) {
+void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
+                                           const std::function<void(const std::string&)>& sendMessage) {
+    if (dbnData.empty()) {
         return;
     }
     
     try {
-        // Use DbnFileStore to read the temporary file
-        db::DbnFileStore store(socketData->tempFilePath);
+        // Create a temporary file for DbnFileStore (it requires a file path)
+        // TODO: Future optimization - parse DBN format directly without temp file
+        std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+        std::string tempPath = (tempDir / ("dbn_processing_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dbn")).string();
+        
+        // Write buffer to temp file (one-time write, no chunk-by-chunk I/O)
+        {
+            std::ofstream tempFile(tempPath, std::ios::binary);
+            if (!tempFile.is_open()) {
+                throw std::runtime_error("Failed to create temporary processing file");
+            }
+            tempFile.write(reinterpret_cast<const char*>(dbnData.data()), dbnData.size());
+            tempFile.close();
+        }
+        
+        // Use DbnFileStore to parse the file
+        db::DbnFileStore store(tempPath);
         
         // Extract symbol from DBN file metadata
         auto metadata = store.GetMetadata();
@@ -304,13 +297,8 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
         
         // Start database session before processing
         if (databaseWriter_ && !symbol_.empty()) {
-            // Extract file name from temp file path
-            std::filesystem::path filePath(socketData->tempFilePath);
-            std::string fileName = filePath.filename().string();
-            size_t fileSize = std::filesystem::file_size(socketData->tempFilePath);
-            
             try {
-                databaseWriter_->startSession(symbol_, fileName, fileSize);
+                databaseWriter_->startSession(symbol_, "upload.dbn", dbnData.size());
                 activeSessionId_ = databaseWriter_->getCurrentSessionId();  // Cache it - never touch databaseWriter_ again from this thread
             } catch (const std::exception& e) {
                 utils::logError("Failed to start database session: " + std::string(e.what()));
@@ -446,6 +434,8 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
         if (databaseWriterThread_.joinable()) {
             databaseWriterThread_.join();
         }
+        // Update total throughput now that DB processing has completed
+        sessionStats_.throughput = getThroughput();
         
         if (sendMessage) {
             nlohmann::json complete;
@@ -456,17 +446,44 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             complete["bytesReceived"] = totalBytesReceived_.load();
             complete["dbWritesPending"] = snapshotRingBuffer_->size();
             complete["sessionId"] = activeSessionId_;
-            double throughput = getThroughput();
-            complete["messageThroughput"] = throughput;
+            // Compute durations on the server side
+            auto zero_tp = std::chrono::steady_clock::time_point{};
+            auto totalStart = (uploadStartTime_ > zero_tp) ? uploadStartTime_ : processingStartTime_;
+            auto totalEnd = (dbEndTime_ > totalStart) ? dbEndTime_ : processingEndTime_;
+            double totalDurationSec = 0.0;
+            if (totalEnd > totalStart) {
+                totalDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart).count()) / 1000.0;
+            }
+            double uploadDurationSec = 0.0;
+            if (uploadEndTime_ > uploadStartTime_ && uploadStartTime_ > zero_tp) {
+                uploadDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_).count()) / 1000.0;
+            }
+            double processingDurationSec = 0.0;
+            if (processingEndTime_ > processingStartTime_) {
+                processingDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(processingEndTime_ - processingStartTime_).count()) / 1000.0;
+            }
+            double dbDurationSec = 0.0;
+            if (dbEndTime_ > dbStartTime_ && dbStartTime_ > zero_tp) {
+                dbDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - dbStartTime_).count()) / 1000.0;
+            }
+
+            double totalThroughput = getThroughput();
+            complete["totalThroughput"] = totalThroughput;
+            complete["totalDurationSec"] = totalDurationSec;
+            double orderThroughput = getOrderThroughput();
+            complete["orderThroughput"] = orderThroughput;
+            complete["processingDurationSec"] = processingDurationSec;
+            complete["dbThroughput"] = getDbThroughput();
+            complete["dbDurationSec"] = dbDurationSec;
+            complete["uploadThroughputMsgs"] = getUploadThroughputMsgs();
+            complete["uploadDurationSec"] = uploadDurationSec;
             
             // Calculate order processing statistics
             double avgNs = getAverageOrderProcessNs();
             uint64_t p99Ns = getP99OrderProcessNs();
             if (avgNs > 0.0) {
-                double ordersPerSec = 1e9 / avgNs;
                 complete["averageOrderProcessNs"] = avgNs;
                 complete["p99OrderProcessNs"] = p99Ns;
-                complete["orderProcessingRate"] = ordersPerSec;
             }
             
             // Final order book summary
@@ -522,6 +539,10 @@ void WebSocketServer::processDbnChunk(const std::vector<uint8_t>& /*chunk*/, Per
             orderBook_->Clear();
         }
         
+        // Clean up temporary processing file
+        if (!tempPath.empty() && std::filesystem::exists(tempPath)) {
+            std::filesystem::remove(tempPath);
+        }
         
     } catch (const std::exception& e) {
         utils::logError("Error processing DBN file: " + std::string(e.what()));
@@ -548,15 +569,16 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
     }
     
     size_t itemsWritten = 0;
-    constexpr size_t kBatchSize = 5000;  // Larger batches for COPY command
+    constexpr size_t kBatchSize = 50000;  // Larger batches for COPY BINARY
     std::vector<MboMessageWrapper> batch;
     batch.reserve(kBatchSize);
+    bool started = false;
     
     auto writeBatch = [&]() {
         if (batch.empty()) return;
         
         if (databaseWriter_ && databaseWriter_->writeBatch(batch)) {
-                itemsWritten += batch.size();
+            itemsWritten += batch.size();
         }
         batch.clear();
     };
@@ -566,6 +588,10 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
     // Continue until processing done AND buffer empty
     while (isServerRunning_.load(std::memory_order_acquire) || !snapshotRingBuffer_->empty()) {
         if (snapshotRingBuffer_->try_pop(wrapper)) {
+            if (!started) {
+                started = true;
+                dbStartTime_ = std::chrono::steady_clock::now();
+            }
             batch.push_back(std::move(wrapper));
             
             // Flush when batch is full
@@ -588,6 +614,18 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
     
     // Final flush of any remaining items
     writeBatch();
+    dbEndTime_ = std::chrono::steady_clock::now();
+    // Compute DB throughput over DB writer active window
+    if (started && dbEndTime_ > dbStartTime_) {
+        auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - dbStartTime_).count();
+        if (durMs > 0) {
+            dbThroughput_ = static_cast<double>(itemsWritten) * 1000.0 / static_cast<double>(durMs);
+        } else {
+            dbThroughput_ = 0.0;
+        }
+    } else {
+        dbThroughput_ = 0.0;
+    }
     
     // Recreate indexes after bulk load complete
     if (databaseWriter_) {
@@ -647,16 +685,18 @@ void WebSocketServer::stop() {
 }
 
 double WebSocketServer::getThroughput() const {
+    // Total throughput from upload start (if available) through DB completion (if available).
     if (processingMessagesReceived_ == 0) return 0.0;
-    
-    // Use processingEndTime_ if available; otherwise current time
-    auto endTimeToUse = (processingEndTime_ > processingStartTime_) ? processingEndTime_ : std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToUse - processingStartTime_);
-    
+    auto zero_tp = std::chrono::steady_clock::time_point{};
+    auto startTime = (uploadStartTime_ > zero_tp) ? uploadStartTime_ : processingStartTime_;
+    auto endTime = (dbEndTime_ > startTime) ? dbEndTime_ : processingEndTime_;
+    if (!(endTime > startTime)) return 0.0;
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
     if (duration.count() == 0) return 0.0;
-    
-    return (double)processingMessagesReceived_ * 1000.0 / duration.count();
+    return static_cast<double>(processingMessagesReceived_) * 1000.0 / static_cast<double>(duration.count());
 }
+
+// removed: getProcessingThroughput
 
 double WebSocketServer::getAverageOrderProcessNs() const {
     if (processingTimingSamples_ == 0) return 0.0;
@@ -679,7 +719,30 @@ uint64_t WebSocketServer::getP99OrderProcessNs() const {
     return samples[idx - 1];
 }
 
-void WebSocketServer::startProcessingThread(const std::string& tempFilePath, const std::function<void(const std::string&)>& sendMessage) {
+double WebSocketServer::getOrderThroughput() const {
+    // Orders per second over the processing window only
+    if (processingOrdersProcessed_ == 0) return 0.0;
+    if (!(processingEndTime_ > processingStartTime_)) return 0.0;
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(processingEndTime_ - processingStartTime_);
+    if (duration.count() == 0) return 0.0;
+    return static_cast<double>(processingOrdersProcessed_) * 1000.0 / static_cast<double>(duration.count());
+}
+
+double WebSocketServer::getUploadThroughputMsgs() const {
+    // Messages per second between uploadStartTime_ and uploadEndTime_
+    // Use processingMessagesReceived_ (total decoded/processed messages) as the numerator
+    auto zero_tp = std::chrono::steady_clock::time_point{};
+    if (!(uploadEndTime_ > uploadStartTime_) || uploadStartTime_ == zero_tp) return 0.0;
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_);
+    if (duration.count() == 0) return 0.0;
+    const double msgs = static_cast<double>(processingMessagesReceived_.load(std::memory_order_acquire));
+    if (msgs <= 0.0) return 0.0;
+    return msgs * 1000.0 / static_cast<double>(duration.count());
+}
+
+// removed: getUploadTimePerMsgMs
+
+void WebSocketServer::startProcessingThread(std::vector<uint8_t>&& dbnData, const std::function<void(const std::string&)>& sendMessage) {
     // Once processing starts, it cannot be stopped - runs to completion independently of WebSocket connection
     if (processingThread_.has_value() && processingThread_->joinable()) {
         processingThread_->join();
@@ -689,6 +752,9 @@ void WebSocketServer::startProcessingThread(const std::string& tempFilePath, con
         databaseWriterThread_.join();
     }
     isServerRunning_.store(true, std::memory_order_release);
+    dbThroughput_ = 0.0;
+    dbStartTime_ = {};
+    dbEndTime_ = {};
     if (orderBook_) {
         orderBook_->Clear();
     }
@@ -697,10 +763,8 @@ void WebSocketServer::startProcessingThread(const std::string& tempFilePath, con
     });
     std::this_thread::sleep_for(kThreadStartupDelay);
     
-    processingThread_ = std::jthread([this, tempFilePath, sendMessage](std::stop_token) {
-        PerSocketData tempData;
-        tempData.tempFilePath = tempFilePath;
-        processDbnChunk({}, &tempData, sendMessage);
+    processingThread_ = std::jthread([this, data = std::move(dbnData), sendMessage](std::stop_token) mutable {
+        processDbnFromMemory(data, sendMessage);
     });
 }
 

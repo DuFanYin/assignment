@@ -62,38 +62,15 @@ CREATE TABLE order_book_snapshots (
     bid_level_count INT,
     ask_level_count INT,
     
+    -- Level data stored as JSONB arrays for performance
+    -- Format: [{"price": 123450000000, "size": 10, "count": 3}, ...]
+    bid_levels_json JSONB,
+    ask_levels_json JSONB,
+    
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Indexes for faster lookups
 CREATE INDEX idx_snapshots_symbol_ts ON order_book_snapshots (symbol, timestamp_ns);
 CREATE INDEX idx_snapshots_session ON order_book_snapshots (session_id, timestamp_ns);
-
--- Bid levels table
--- Stores the top N bid levels for each snapshot
-CREATE TABLE bid_levels (
-    id BIGSERIAL PRIMARY KEY,
-    snapshot_id BIGINT NOT NULL REFERENCES order_book_snapshots(id) ON DELETE CASCADE,
-    price BIGINT NOT NULL,
-    size INT NOT NULL,
-    count INT NOT NULL,
-    level_index INT NOT NULL
-);
-
--- Index for faster lookup of bid levels by snapshot
-CREATE INDEX idx_bid_levels_snapshot_id ON bid_levels (snapshot_id, level_index);
-
--- Ask levels table
--- Stores the top N ask levels for each snapshot
-CREATE TABLE ask_levels (
-    id BIGSERIAL PRIMARY KEY,
-    snapshot_id BIGINT NOT NULL REFERENCES order_book_snapshots(id) ON DELETE CASCADE,
-    price BIGINT NOT NULL,
-    size INT NOT NULL,
-    count INT NOT NULL,
-    level_index INT NOT NULL
-);
-
--- Index for faster lookup of ask levels by snapshot
-CREATE INDEX idx_ask_levels_snapshot_id ON ask_levels (snapshot_id, level_index);
 

@@ -256,22 +256,45 @@ The architecture uses **delegation via ring buffer** to separate processing from
 - Generates newline-delimited JSON format
 - Served via HTTP endpoint with session-specific download
 
-### Performance Features
+### Performance Optimizations
 
-1. **PostgreSQL COPY commands**: Bulk data loading using COPY for maximum throughput
-2. **Index management**: Drop indexes before bulk load, recreate after - significantly faster than maintaining indexes during inserts
-3. **Lock-free ring buffer delegation**: Processing thread never blocks on database I/O - delegates writes to dedicated DB thread via lock-free SPSC queue
-4. **Cache-line alignment**: Ring buffer read/write positions on separate 64-byte cache lines to prevent false sharing
-5. **Batch processing**: Database writer processes snapshots in batches of 5000 for optimal COPY performance
-6. **Separate database writer thread**: Order book processing is pure in-memory - all I/O happens in background
-7. **Efficient snapshot structure**: Minimal heap allocations, fixed-size top-N levels
-8. **On-demand JSON generation**: JSON generated only when downloaded, not during processing - reduces memory footprint
-9. **C++20 atomic wait/notify**: Efficient blocking without busy-waiting or condition variables
-10. **Power-of-2 ring buffer**: Fast modulo via bitmask, no division operations
-11. **Memory fences**: Proper synchronization between processing and DB threads using `std::atomic_thread_fence`
-12. **C++20 jthread**: Both processing and database writer threads use `std::jthread` for modern thread management with stop tokens
-13. **Per-cycle thread spawning**: Database writer thread spawned per-cycle for clean session management and resource cleanup
-14. **Stored processing thread**: Processing thread stored in `std::optional<std::jthread>` for proper lifecycle management
+**Threading & Concurrency:**
+- Lock-free SPSC ring buffer with C++20 atomics (wait/notify)
+- Cache-line aligned read/write positions (64-byte alignment)
+- Power-of-2 ring buffer size for fast modulo via bitmask
+- Memory fences for proper cross-thread synchronization
+- Processing thread never blocks on I/O (pure in-memory operations)
+
+**Database Performance:**
+- **JSONB Level Storage**: Single table write instead of 3 tables (**2.5-3x faster**)
+- **PostgreSQL COPY BINARY**: Bulk loading with binary protocol (50k batch size)
+- **Index Management**: Drop before load, recreate after (much faster than maintaining)
+- **Asynchronous Commits**: `synchronous_commit = off` reduces WAL flush overhead
+- Batch processing in large chunks for optimal throughput
+
+**Memory & CPU:**
+- Efficient snapshot structure with minimal heap allocations
+- Fixed-size top-N levels (configured via `server.top_levels`)
+- On-demand JSON generation (only when user downloads)
+- Modern C++20 jthread for automatic thread cleanup
+
+## Database Schema
+
+**`processing_sessions`**
+- Tracks each upload session with metadata and statistics
+- Primary key: `session_id` (unique per cycle)
+
+**`order_book_snapshots`**
+- Stores order book state after each MBO message
+- Level data stored as JSONB: `[{"price":123,"size":10,"count":3},...]`
+- Foreign key: `session_id` references `processing_sessions`
+
+**Price Format:**
+- Fixed-point: multiply by 1e-9 for decimal value
+- Sizes in native instrument units
+- Counts = number of orders at that level
+
+
 
 ### Order Book Snapshot Format
 
@@ -312,7 +335,25 @@ Each JSON record contains:
 - `levels.bids/asks`: Top-N price levels (N = `top_levels` from config)
 - `stats`: Order book statistics at this snapshot
 
-**Price Format:**
-- Prices are in fixed-point format (multiply by 1e-9 to get decimal)
-- Sizes are in native instrument units
-- Counts represent number of orders at that level
+
+[INFO] BEGIN took 2581 us
+[INFO] Sequence allocation took 4048 us
+[INFO] COPY BINARY started for order_book_snapshots
+[INFO] Sending 2848 bytes of snapshot data
+[INFO] COPY snapshots (with JSONB levels) took 5 ms
+[INFO] COMMIT took 0 ms
+[INFO] Total batch (12 items) took 13 ms
+[INFO] BEGIN took 328 us
+[INFO] Sequence allocation took 5975 us
+[INFO] COPY BINARY started for order_book_snapshots
+[INFO] Sending 4475203 bytes of snapshot data
+[INFO] COPY snapshots (with JSONB levels) took 196 ms
+[INFO] COMMIT took 0 ms
+[INFO] Total batch (4864 items) took 241 ms
+[INFO] BEGIN took 164 us
+[INFO] Sequence allocation took 9963 us
+[INFO] COPY BINARY started for order_book_snapshots
+[INFO] Sending 31884755 bytes of snapshot data
+[INFO] COPY snapshots (with JSONB levels) took 1396 ms
+[INFO] COMMIT took 0 ms
+[INFO] Total batch (32112 items) took 1615 ms
