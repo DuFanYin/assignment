@@ -34,12 +34,12 @@ namespace project {
     class JSONGenerator;
 }
 
-// Include PostgresConnection for Config (no circular dependency since database_writer doesn't include websocket_server)
-#include "database/postgres_connection.hpp"
+// Include ClickHouseConnection for Config
+#include "database/clickhouse_connection.hpp"
 
 class WebSocketServer {
 public:
-    WebSocketServer(int port, const PostgresConnection::Config& dbConfig,
+    WebSocketServer(int port, const ClickHouseConnection::Config& dbConfig,
                     size_t topLevels = 10,
                     size_t ringBufferSize = 65536);
     ~WebSocketServer();
@@ -73,7 +73,7 @@ private:
     void databaseWriterLoop(std::stop_token stopToken);
     
     int port_;
-    PostgresConnection::Config databaseConfig_;
+    ClickHouseConnection::Config databaseConfig_;
     std::atomic<bool> isServerRunning_;
     std::atomic<size_t> totalMessagesProcessed_;
     std::atomic<size_t> totalBytesReceived_;

@@ -22,15 +22,14 @@ int main() {
     size_t topLevels = static_cast<size_t>(cfg.getInt("server.top_levels", 10));
     size_t ringBufferSize = static_cast<size_t>(cfg.getInt("server.ring_buffer_size", 65536));
     
-    // Get PostgreSQL configuration
-    PostgresConnection::Config dbConfig;
-    dbConfig.host = cfg.getString("postgres.host", "localhost");
-    dbConfig.port = cfg.getInt("postgres.port", 5432);
-    dbConfig.dbname = cfg.getString("postgres.dbname", "orderbook");
-    dbConfig.user = cfg.getString("postgres.user", "postgres");
-    dbConfig.password = cfg.getString("postgres.password", "postgres");
-    dbConfig.maxConnections = cfg.getInt("postgres.max_connections", 10);
-    dbConfig.connectionTimeout = cfg.getInt("postgres.connection_timeout", 30);
+    // Get ClickHouse configuration
+    ClickHouseConnection::Config dbConfig;
+    dbConfig.host = cfg.getString("clickhouse.host", "localhost");
+    dbConfig.port = static_cast<uint16_t>(cfg.getInt("clickhouse.port", 9000));
+    dbConfig.database = cfg.getString("clickhouse.database", "orderbook");
+    dbConfig.user = cfg.getString("clickhouse.user", "default");
+    dbConfig.password = cfg.getString("clickhouse.password", "");
+    dbConfig.compression = cfg.getBool("clickhouse.compression", true);
     
     auto server = std::make_unique<WebSocketServer>(wsPort, dbConfig, topLevels, ringBufferSize);
     

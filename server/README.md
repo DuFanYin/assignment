@@ -1,6 +1,6 @@
 # WebSocket Order Book Server
 
-A high-performance server for processing DBN (Databento) order book files, storing snapshots in PostgreSQL, and serving JSON output on-demand.
+A high-performance server for processing DBN (Databento) order book files, storing snapshots in ClickHouse, and serving JSON output on-demand.
 
 ## Prerequisites & Setup
 
@@ -11,47 +11,53 @@ A high-performance server for processing DBN (Databento) order book files, stori
 - **C++20 compiler** - GCC 10+ or Clang 12+ with C++20 support
 
 **System Libraries:**
-- **PostgreSQL development libraries** (`libpq`) - For database connectivity
+- **lz4** - Compression library required by ClickHouse
+- **cityhash** - Hash library required by ClickHouse
 - **OpenSSL** - For secure connections
 - **ZLIB** - For compression
 - **CURL** - For HTTP client functionality
 
 **Runtime Requirements:**
-- **PostgreSQL 12+** - Database server must be installed and running
+- **ClickHouse** - Columnar database server must be installed and running
+- **clickhouse-client** - ClickHouse command-line client (for database setup)
 - **Git** - For cloning third-party dependencies (only needed for first build)
 
 ### Installation
 
 **macOS:**
 ```bash
-brew install postgresql cmake openssl zlib curl
+brew install clickhouse lz4 cityhash cmake openssl zlib curl
 ```
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install postgresql postgresql-dev cmake libssl-dev zlib1g-dev libcurl4-openssl-dev build-essential git
+# Install ClickHouse (see https://clickhouse.com/docs/en/install)
+sudo apt-get install clickhouse-server clickhouse-client
+sudo apt-get install liblz4-dev libcityhash-dev cmake libssl-dev zlib1g-dev libcurl4-openssl-dev build-essential git
 ```
 
 **Fedora/RHEL:**
 ```bash
-sudo dnf install postgresql postgresql-devel cmake openssl-devel zlib-devel libcurl-devel gcc-c++ git
+# Install ClickHouse (see https://clickhouse.com/docs/en/install)
+sudo dnf install clickhouse-server clickhouse-client
+sudo dnf install lz4-devel cityhash-devel cmake openssl-devel zlib-devel libcurl-devel gcc-c++ git
 ```
 
 ### Database Setup
 
 The `server/scripts/start.sh` script automatically handles all database setup. You only need to:
 
-1. **Ensure PostgreSQL is running** - The script will verify this automatically
+1. **Ensure ClickHouse is running** - The script will verify this automatically
 2. **Configure database connection** in `server/config/config.ini` (see Configuration section below)
 
 The script will automatically:
-- Check if PostgreSQL is accessible
+- Check if ClickHouse is accessible via native protocol
 - Create the database if it doesn't exist
 - Create all required tables if they don't exist
 
 **No manual database setup is required!**
 
-The build script will also automatically download and build third-party dependencies (databento-cpp, uWebSockets) on first build.
+The build script will also automatically download and build third-party dependencies (databento-cpp, clickhouse-cpp, uWebSockets) on first build.
 
 ### Configuration
 
@@ -62,21 +68,20 @@ Edit `server/config/config.ini` to configure server and database settings:
 websocket.port=9001
 
 # Order book settings
+# Note: symbol is extracted from the DBN file metadata automatically
 server.top_levels=10
-server.output_full_book=true
 server.ring_buffer_size=65536
 
-# PostgreSQL settings (required)
-postgres.host=localhost
-postgres.port=5432
-postgres.dbname=orderbook
-postgres.user=postgres
-postgres.password=your_password
-postgres.max_connections=10
-postgres.connection_timeout=30
+# ClickHouse settings (high-performance columnar database)
+clickhouse.host=127.0.0.1
+clickhouse.port=9000
+clickhouse.database=orderbook
+clickhouse.user=default
+clickhouse.password=your_password
+clickhouse.compression=true
 ```
 
-**Important:** Ensure PostgreSQL is running before starting the server. The script will automatically create the database and tables if they don't exist.
+**Important:** Ensure ClickHouse is running before starting the server. The script will automatically create the database and tables if they don't exist.
 
 ### Start Server
 
@@ -99,7 +104,7 @@ Or from the project root:
 
 ### Overview
 
-The server processes DBN files containing market-by-order (MBO) messages, maintains an in-memory order book, captures snapshots after each update, and stores them in PostgreSQL. The architecture uses a per-cycle threading model where each file upload spawns dedicated processing and database writer threads that run to completion.
+The server processes DBN files containing market-by-order (MBO) messages, maintains an in-memory order book, captures snapshots after each update, and stores them in ClickHouse. The architecture uses a per-cycle threading model where each file upload spawns dedicated processing and database writer threads that run to completion.
 
 ### Threading Model
 
@@ -126,10 +131,8 @@ The server uses a per-cycle multi-threaded architecture:
                  │   - Cannot be stopped once started
                  │
                  └─► Database Writer Thread (jthread, per-cycle)
-                     - Drops indexes for faster bulk loading
                      - Pops snapshots from ring buffer
-                     - Writes snapshots via PostgreSQL COPY
-                     - Recreates indexes after bulk load
+                     - Writes snapshots via ClickHouse Block inserts
                      - Updates session stats and ends session
                      - Exits after cycle completes
 ```
@@ -167,12 +170,10 @@ Processing Thread
             ▼
     Database Writer Thread
             │
-            │ (5) Drop indexes
-            │ (6) Write via COPY command
-            │ (7) Recreate indexes
-            │ (8) Update session stats
+            │ (5) Write via ClickHouse Block insert
+            │ (6) Update session stats
             ▼
-    PostgreSQL Database
+    ClickHouse Database
             │
             │ (9) User requests download via HTTP
             ▼
@@ -196,10 +197,9 @@ Processing Thread
    - Pushes snapshot to lock-free ring buffer
    - Cannot be stopped once started
 4. **Database writer thread spawns** at the start of the cycle:
-   - Drops indexes at start of session for faster bulk loading
-   - Pops snapshots from ring buffer in batches (5000 items)
-   - Writes snapshots to PostgreSQL using COPY commands
-   - Recreates indexes after all snapshots are written
+   - Pops snapshots from ring buffer in batches
+   - Writes snapshots to ClickHouse using native Block inserts (columnar format)
+   - ClickHouse automatically handles indexing (sparse indexes, no manual management needed)
    - Updates session statistics and final book state
    - Ends database session
    - Exits after cycle completes
@@ -228,10 +228,9 @@ The architecture uses **delegation via ring buffer** to separate processing from
 
 2. **Database Writer Thread** (`std::jthread`, per-cycle):
    - Spawns per-cycle in `startProcessingThread()` before processing thread
-   - Drops indexes at start of session for faster bulk loading
    - Pops snapshots from ring buffer in batches (blocking wait when empty)
-   - Writes snapshots to PostgreSQL using COPY commands
-   - Recreates indexes after all snapshots are written
+   - Writes snapshots to ClickHouse using native Block inserts (columnar format)
+   - ClickHouse uses sparse indexes automatically - no manual index management needed
    - Updates session statistics and final book state
    - Exits after cycle completes (when processing done AND buffer empty)
    - Next cycle spawns a new database writer thread
@@ -266,10 +265,11 @@ The architecture uses **delegation via ring buffer** to separate processing from
 - Processing thread never blocks on I/O (pure in-memory operations)
 
 **Database Performance:**
-- **JSONB Level Storage**: Single table write instead of 3 tables (**2.5-3x faster**)
-- **PostgreSQL COPY BINARY**: Bulk loading with binary protocol (50k batch size)
-- **Index Management**: Drop before load, recreate after (much faster than maintaining)
-- **Asynchronous Commits**: `synchronous_commit = off` reduces WAL flush overhead
+- **Native Array Storage**: ClickHouse native `Array(Tuple(...))` types instead of JSONB (no parsing overhead)
+- **Columnar Storage**: MergeTree engine optimized for time-series data with automatic compression
+- **Block Inserts**: Native ClickHouse Block API for efficient bulk inserts
+- **Automatic Indexing**: Sparse indexes managed automatically by ClickHouse (no manual index management)
+- **No WAL Overhead**: ClickHouse's columnar design eliminates traditional WAL bottlenecks
 - Batch processing in large chunks for optimal throughput
 
 **Memory & CPU:**
@@ -282,12 +282,15 @@ The architecture uses **delegation via ring buffer** to separate processing from
 
 **`processing_sessions`**
 - Tracks each upload session with metadata and statistics
-- Primary key: `session_id` (unique per cycle)
+- Engine: `MergeTree()` ordered by `(session_id, start_time)`
+- Fields: session_id, symbol, file_name, file_size, status, timestamps, statistics, final book state
 
 **`order_book_snapshots`**
 - Stores order book state after each MBO message
-- Level data stored as JSONB: `[{"price":123,"size":10,"count":3},...]`
-- Foreign key: `session_id` references `processing_sessions`
+- Engine: `MergeTree()` ordered by `(session_id, timestamp_ns)` with monthly partitioning
+- Level data stored as native ClickHouse arrays: `Array(Tuple(price Int64, size UInt32, count UInt32))`
+- No foreign key constraints (ClickHouse doesn't enforce them, but session_id links to processing_sessions)
+- Sparse index on `symbol` for faster queries
 
 **Price Format:**
 - Fixed-point: multiply by 1e-9 for decimal value
@@ -335,29 +338,3 @@ Each JSON record contains:
 - `levels.bids/asks`: Top-N price levels (N = `top_levels` from config)
 - `stats`: Order book statistics at this snapshot
 
-
-[INFO] BEGIN took 2581 us
-[INFO] Sequence allocation took 4048 us
-[INFO] COPY BINARY started for order_book_snapshots
-[INFO] Sending 2848 bytes of snapshot data
-[INFO] COPY snapshots (with JSONB levels) took 5 ms
-[INFO] COMMIT took 0 ms
-[INFO] Total batch (12 items) took 13 ms
-[INFO] BEGIN took 328 us
-[INFO] Sequence allocation took 5975 us
-[INFO] COPY BINARY started for order_book_snapshots
-[INFO] Sending 4475203 bytes of snapshot data
-[INFO] COPY snapshots (with JSONB levels) took 196 ms
-[INFO] COMMIT took 0 ms
-[INFO] Total batch (4864 items) took 241 ms
-[INFO] BEGIN took 164 us
-[INFO] Sequence allocation took 9963 us
-[INFO] COPY BINARY started for order_book_snapshots
-[INFO] Sending 31884755 bytes of snapshot data
-[INFO] COPY snapshots (with JSONB levels) took 1396 ms
-[INFO] COMMIT took 0 ms
-[INFO] Total batch (32112 items) took 1615 ms
-
-
-
-Password for the default user is saved in file /etc/clickhouse-server/users.d/default-password.xml.

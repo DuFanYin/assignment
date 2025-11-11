@@ -1,6 +1,6 @@
 #pragma once
 
-#include "database/postgres_connection.hpp"
+#include "database/clickhouse_connection.hpp"
 #include "project/book_snapshot.hpp"
 #include <string>
 #include <memory>
@@ -14,7 +14,7 @@ namespace project {
 
 class DatabaseWriter {
 public:
-    explicit DatabaseWriter(const PostgresConnection::Config& config);
+    explicit DatabaseWriter(const ClickHouseConnection::Config& config);
     ~DatabaseWriter();
     
     // Session management
@@ -26,18 +26,20 @@ public:
                              double bestBid, double bestAsk, double spread);
     std::string getCurrentSessionId() const { return activeSessionId_; }
     
-    // Write multiple snapshots in a batch (faster)
+    // Write multiple snapshots in a batch (ClickHouse native arrays - MUCH faster!)
     bool writeBatch(const std::vector<MboMessageWrapper>& batch);
     
-    // Index management for bulk operations
-    bool dropIndexes();
-    bool recreateIndexes();
+    // ClickHouse doesn't need index management (sparse indexes are automatic)
+    // Keeping these for compatibility but they're no-ops
+    bool dropIndexes() { return true; }
+    bool recreateIndexes() { return true; }
     
 private:
-    PostgresConnection postgresConnection_;
+    ClickHouseConnection clickhouseConnection_;
     std::string activeSessionId_;
     std::atomic<bool> isSessionActive_{false};
     std::atomic<size_t> totalSnapshotsWritten_{0};
+    uint64_t nextId_{1};  // For generating snapshot IDs
     
     // Helper functions
     std::string generateSessionId() const;

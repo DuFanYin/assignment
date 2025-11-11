@@ -1,6 +1,6 @@
 #pragma once
 
-#include "database/postgres_connection.hpp"
+#include "database/clickhouse_connection.hpp"
 #include <string>
 #include <memory>
 
@@ -8,7 +8,7 @@ namespace project {
 
 class JSONGenerator {
 public:
-    explicit JSONGenerator(const PostgresConnection::Config& config);
+    explicit JSONGenerator(const ClickHouseConnection::Config& config);
     ~JSONGenerator();
     
     // Generate JSON from database for a specific session
@@ -18,14 +18,13 @@ public:
     std::string generateJSONForSymbol(const std::string& symbol);
     
     // Get database connection (for status checks)
-    PostgresConnection& getConnection() { return postgresConnection_; }
+    ClickHouseConnection& getConnection() { return clickhouseConnection_; }
     
 private:
-    PostgresConnection postgresConnection_;
+    ClickHouseConnection clickhouseConnection_;
     
-    // Helper to build JSON from query results
-    std::string buildJSON(const PostgresConnection::QueryResult& snapshotsRes);
-    std::string fetchLevels(const std::string& snapshotId, const std::string& tableName);
+    // Helper to build JSON from ClickHouse results
+    std::string buildJSON(const std::string& sessionId);
 };
 
 } // namespace project

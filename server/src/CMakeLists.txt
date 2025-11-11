@@ -3,12 +3,24 @@
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
-find_package(PostgreSQL REQUIRED)
+
+# ClickHouse library path
+set(CLICKHOUSE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/clickhouse-cpp)
 
 # Find zstd library
 find_library(ZSTD_LIBRARY zstd)
 if(NOT ZSTD_LIBRARY)
     message(FATAL_ERROR "zstd library not found")
+endif()
+
+# Find system libraries required by clickhouse-cpp
+find_library(LZ4_LIB lz4)
+if(NOT LZ4_LIB)
+    message(FATAL_ERROR "lz4 library not found. Please install it (e.g., macOS: brew install lz4).")
+endif()
+find_library(CITYHASH_LIB cityhash)
+if(NOT CITYHASH_LIB)
+    message(FATAL_ERROR "cityhash library not found. Please install it (e.g., macOS: brew install cityhash).")
 endif()
 
 # Determine databento path relative to project root (now in thirdparty)
@@ -17,6 +29,8 @@ set(DATABENTO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/databento-cpp)
 # uWebSockets path
 set(UWEBSOCKETS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/uWebSockets)
 set(USOCKETS_ROOT ${UWEBSOCKETS_ROOT}/uSockets)
+
+# ClickHouse library path (already set above)
 
 # Build core library
 add_library(core_lib
@@ -32,21 +46,24 @@ target_include_directories(core_lib PUBLIC
     ${DATABENTO_ROOT}/build/_deps/date_src-src/include
     ${DATABENTO_ROOT}/build/_deps/httplib-src
     ${DATABENTO_ROOT}/build/_deps/json-src/include
+    ${UWEBSOCKETS_ROOT}
     ${UWEBSOCKETS_ROOT}/src
     ${USOCKETS_ROOT}/src
-    ${PostgreSQL_INCLUDE_DIRS}
+    ${CLICKHOUSE_ROOT}
+    ${CLICKHOUSE_ROOT}/contrib/absl
 )
 
-# Build database library
+# Build database library (ClickHouse instead of PostgreSQL)
 add_library(database_lib
-    database/postgres_connection.cpp
+    database/clickhouse_connection.cpp
     database/database_writer.cpp
     database/json_generator.cpp
 )
 
 target_include_directories(database_lib PUBLIC
     ../include
-    ${PostgreSQL_INCLUDE_DIRS}
+    ${CLICKHOUSE_ROOT}
+    ${CLICKHOUSE_ROOT}/contrib/absl
     ${DATABENTO_ROOT}/include
     ${DATABENTO_ROOT}/build/include
     ${DATABENTO_ROOT}/build/_deps/date_src-src/include
@@ -57,7 +74,9 @@ target_include_directories(database_lib PUBLIC
 # OpenSSL includes are provided by OpenSSL::SSL and OpenSSL::Crypto targets
 
 target_link_libraries(database_lib
-    ${PostgreSQL_LIBRARIES}
+    ${CLICKHOUSE_ROOT}/build/clickhouse/libclickhouse-cpp-lib.a
+    ${LZ4_LIB}
+    ${CITYHASH_LIB}
     OpenSSL::SSL
     OpenSSL::Crypto
 )

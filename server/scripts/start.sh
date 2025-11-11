@@ -29,6 +29,40 @@ if [[ "$MODE" == "build" ]]; then
     echo "=========================================="
     echo ""
     
+    # Step 0: Check required system libraries for ClickHouse (lz4, cityhash)
+    echo "[0/6] Checking system libraries (lz4, cityhash)..."
+    MISSING_LIBS=0
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS - prefer Homebrew checks
+        if ! command -v brew >/dev/null 2>&1; then
+            echo "  Homebrew not found. Please install lz4 and cityhash manually."
+        fi
+        if ! brew list --versions lz4 >/dev/null 2>&1; then
+            echo "  Missing: lz4 (install with: brew install lz4)"
+            MISSING_LIBS=1
+        fi
+        if ! brew list --versions cityhash >/dev/null 2>&1; then
+            echo "  Missing: cityhash (install with: brew install cityhash)"
+            MISSING_LIBS=1
+        fi
+    else
+        # Linux - try pkg-config and ldconfig
+        if ! pkg-config --exists liblz4 2>/dev/null && ! ldconfig -p 2>/dev/null | grep -qi "liblz4"; then
+            echo "  Missing: lz4 development package (e.g., apt-get install liblz4-dev or dnf install lz4-devel)"
+            MISSING_LIBS=1
+        fi
+        if ! pkg-config --exists cityhash 2>/dev/null && ! ldconfig -p 2>/dev/null | grep -qi "libcityhash"; then
+            echo "  Missing: cityhash development package (e.g., apt-get install libleveldb-dev cityhash or build from source)"
+            MISSING_LIBS=1
+        fi
+    fi
+    if [[ "$MISSING_LIBS" -ne 0 ]]; then
+        echo "✗ Required system libraries are missing. Please install the above and re-run."
+        exit 1
+    else
+        echo "✓ System libraries present"
+    fi
+    
     # Step 1: Clone and build databento-cpp
     echo "[1/5] Setting up databento-cpp..."
     mkdir -p thirdparty
@@ -71,8 +105,49 @@ if [[ "$MODE" == "build" ]]; then
     
     cd "$SCRIPT_DIR/.."
     
-    # Step 2: Clone uWebSockets (includes uSockets submodule)
-    echo "[2/5] Setting up uWebSockets..."
+    # Step 2: Clone and build clickhouse-cpp
+    echo "[2/6] Setting up clickhouse-cpp..."
+    cd thirdparty
+    
+    if [ ! -d "clickhouse-cpp" ]; then
+        echo "  Cloning clickhouse-cpp..."
+        git clone https://github.com/ClickHouse/clickhouse-cpp.git > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "✗ Failed to clone clickhouse-cpp"
+            exit 1
+        fi
+    fi
+    
+    cd clickhouse-cpp
+    
+    # Build clickhouse-cpp if not already built
+    if [ ! -d "build" ] || [ ! -f "build/clickhouse/libclickhouse-cpp-lib.a" ]; then
+        echo "  Building clickhouse-cpp..."
+        mkdir -p build
+        cd build
+        cmake .. -DBUILD_SHARED_LIBS=OFF > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "✗ clickhouse-cpp CMake configuration failed"
+            echo "Running CMake with verbose output:"
+            cmake .. -DBUILD_SHARED_LIBS=OFF
+            exit 1
+        fi
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2) > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "✗ clickhouse-cpp build failed"
+            echo "Running make with verbose output:"
+            make
+            exit 1
+        fi
+        echo "✓ clickhouse-cpp built successfully"
+    else
+        echo "✓ clickhouse-cpp already built"
+    fi
+    
+    cd "$SCRIPT_DIR/.."
+    
+    # Step 3: Clone uWebSockets (includes uSockets submodule)
+    echo "[3/6] Setting up uWebSockets..."
     cd thirdparty
     
     # Clone uWebSockets with submodules if it doesn't exist
@@ -143,8 +218,8 @@ if [[ "$MODE" == "build" ]]; then
     
     cd "$SCRIPT_DIR/.."
     
-    # Step 3: Prepare build directory
-    echo "[3/5] Preparing build directory..."
+    # Step 4: Prepare build directory
+    echo "[4/6] Preparing build directory..."
     mkdir -p build
     cd build
     
@@ -155,8 +230,8 @@ if [[ "$MODE" == "build" ]]; then
         rm -rf CMakeFiles/
     fi
     
-    # Step 4: Configure CMake
-    echo "[4/5] Configuring CMake..."
+    # Step 5: Configure CMake
+    echo "[5/6] Configuring CMake..."
     cmake .. > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo "✗ CMake configuration failed"
@@ -166,8 +241,8 @@ if [[ "$MODE" == "build" ]]; then
     fi
     echo "✓ CMake configuration successful"
     
-    # Step 5: Compile project
-    echo "[5/5] Compiling project..."
+    # Step 6: Compile project
+    echo "[6/6] Compiling project..."
     make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2) > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo "✗ Build failed"
@@ -200,15 +275,12 @@ if [[ "$MODE" == "clean" ]]; then
         exit 1
     fi
     
-    # Parse config.ini to get database settings
-    DB_HOST=$(grep "^postgres.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
-    DB_PORT=$(grep "^postgres.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "5432")
-    DB_NAME=$(grep "^postgres.dbname=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
-    DB_USER=$(grep "^postgres.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
-    DB_PASSWORD=$(grep "^postgres.password=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
-    
-    # Export password for psql
-    export PGPASSWORD="$DB_PASSWORD"
+    # Parse config.ini to get ClickHouse settings
+    DB_HOST=$(grep "^clickhouse.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
+    DB_PORT=$(grep "^clickhouse.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "9000")
+    DB_NAME=$(grep "^clickhouse.database=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
+    DB_USER=$(grep "^clickhouse.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "default")
+    DB_PASSWORD=$(grep "^clickhouse.password=" "$CONFIG_FILE" | cut -d'=' -f2- || echo "")
     
     echo "Database: $DB_NAME"
     echo "Host: $DB_HOST"
@@ -216,30 +288,36 @@ if [[ "$MODE" == "clean" ]]; then
     echo "User: $DB_USER"
     echo ""
     
-    # Check if PostgreSQL is running
-    if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" > /dev/null 2>&1; then
-        echo "✗ PostgreSQL is not running or not accessible"
-        echo "  Please ensure PostgreSQL is running and accessible at $DB_HOST:$DB_PORT"
+    # Check if ClickHouse is running (test query via native client only)
+    if ! command -v clickhouse-client >/dev/null 2>&1; then
+        echo "✗ clickhouse-client not found. Please install ClickHouse client."
         exit 1
     fi
-    echo "✓ PostgreSQL is running"
-    
-    # Check if database exists
-    DB_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
-    if [ "$DB_EXISTS" -eq 0 ]; then
-        echo "✓ Database '$DB_NAME' does not exist (nothing to clean)"
-        exit 0
+    CLICKHOUSE_ARGS=(--host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER")
+    if [ -n "$DB_PASSWORD" ]; then
+        CLICKHOUSE_ARGS+=(--password="$DB_PASSWORD")
     fi
+    if ! clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="SELECT 1" > /dev/null 2>&1; then
+        echo "✗ ClickHouse is not running or accessible via native protocol at $DB_HOST:$DB_PORT"
+        echo "  Please ensure the server is running and accessible."
+        exit 1
+    fi
+    echo "✓ ClickHouse is running"
     
     echo ""
+    
+    # Ensure database exists
+    if ! clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="CREATE DATABASE IF NOT EXISTS $DB_NAME" > /dev/null 2>&1; then
+        echo "✗ Failed to create or access database '$DB_NAME'"
+        exit 1
+    fi
+    
     echo "Wiping database..."
     
     # Drop all tables
     echo "  Dropping tables..."
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" << EOF > /dev/null 2>&1
-DROP TABLE IF EXISTS order_book_snapshots CASCADE;
-DROP TABLE IF EXISTS processing_sessions CASCADE;
-EOF
+    clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="DROP TABLE IF EXISTS ${DB_NAME}.order_book_snapshots" > /dev/null 2>&1
+    clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="DROP TABLE IF EXISTS ${DB_NAME}.processing_sessions" > /dev/null 2>&1
     
     if [ $? -ne 0 ]; then
         echo "✗ Failed to drop tables"
@@ -248,14 +326,14 @@ EOF
     echo "✓ Tables dropped"
     
     # Recreate schema
-    SCHEMA_FILE="db/schema/schema.sql"
+    SCHEMA_FILE="db/schema/clickhouse_schema.sql"
     if [ ! -f "$SCHEMA_FILE" ]; then
         echo "✗ Schema file not found: $SCHEMA_FILE"
         exit 1
     fi
     
     echo "  Recreating schema..."
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$SCHEMA_FILE" > /dev/null 2>&1
+    clickhouse-client "${CLICKHOUSE_ARGS[@]}" --database="$DB_NAME" --multiquery < "$SCHEMA_FILE" > /dev/null 2>&1
     
     if [ $? -ne 0 ]; then
         echo "✗ Failed to recreate schema"
@@ -329,44 +407,40 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Parse config.ini to get database settings
-DB_HOST=$(grep "^postgres.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
-DB_PORT=$(grep "^postgres.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "5432")
-DB_NAME=$(grep "^postgres.dbname=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
-DB_USER=$(grep "^postgres.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
-DB_PASSWORD=$(grep "^postgres.password=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "postgres")
+# Parse config.ini to get ClickHouse settings
+DB_HOST=$(grep "^clickhouse.host=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "localhost")
+DB_PORT=$(grep "^clickhouse.port=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "9000")
+DB_NAME=$(grep "^clickhouse.database=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "orderbook")
+DB_USER=$(grep "^clickhouse.user=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ' || echo "default")
+DB_PASSWORD=$(grep "^clickhouse.password=" "$CONFIG_FILE" | cut -d'=' -f2- || echo "")
 
-# Export password for psql
-export PGPASSWORD="$DB_PASSWORD"
+# Prepare client args
+if ! command -v clickhouse-client >/dev/null 2>&1; then
+    echo "✗ clickhouse-client not found. Please install ClickHouse client."
+    exit 1
+fi
+CLICKHOUSE_ARGS=(--host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER")
+if [ -n "$DB_PASSWORD" ]; then
+    CLICKHOUSE_ARGS+=(--password="$DB_PASSWORD")
+fi
 
-# Check if PostgreSQL is running
-if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" > /dev/null 2>&1; then
-    echo "✗ PostgreSQL not accessible at $DB_HOST:$DB_PORT"
+# Ensure database exists
+if ! clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="CREATE DATABASE IF NOT EXISTS $DB_NAME" > /dev/null 2>&1; then
+    echo "✗ Failed to create or access database '$DB_NAME'"
     exit 1
 fi
 
-# Check if database exists, create if not
-DB_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
-if [ "$DB_EXISTS" -eq 0 ]; then
-    echo "Creating database '$DB_NAME'..."
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        echo "✗ Failed to create database"
-        exit 1
-    fi
-fi
-
-# Check if tables exist, create if not
-SCHEMA_FILE="../db/schema/schema.sql"
+# Ensure schema exists (if not present, apply)
+SCHEMA_FILE="../db/schema/clickhouse_schema.sql"
 if [ ! -f "$SCHEMA_FILE" ]; then
     echo "✗ Schema file not found: $SCHEMA_FILE"
     exit 1
 fi
 
-TABLE_EXISTS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'processing_sessions');")
-if [ "$TABLE_EXISTS" != "t" ]; then
+TABLE_EXISTS=$(clickhouse-client "${CLICKHOUSE_ARGS[@]}" --query="SELECT count() FROM system.tables WHERE database = '$DB_NAME' AND name = 'processing_sessions'")
+if [ "$TABLE_EXISTS" -eq 0 ]; then
     echo "Creating schema..."
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$SCHEMA_FILE" > /dev/null 2>&1
+    clickhouse-client "${CLICKHOUSE_ARGS[@]}" --database="$DB_NAME" --multiquery < "$SCHEMA_FILE" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo "✗ Failed to create schema"
         exit 1

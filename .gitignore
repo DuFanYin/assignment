@@ -117,4 +117,5 @@ gmon.out
 src/data/order_book_output.json
 *.json
 
-thirdparty/
+server_c/thirdparty/
+

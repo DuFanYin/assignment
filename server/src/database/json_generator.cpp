@@ -1,158 +1,188 @@
 #include "database/json_generator.hpp"
 #include "project/utils.hpp"
 #include <nlohmann/json.hpp>
+#include <clickhouse/client.h>
+#include <clickhouse/columns/column.h>
 #include <sstream>
 #include <vector>
 
 namespace project {
 
-JSONGenerator::JSONGenerator(const PostgresConnection::Config& config)
-    : postgresConnection_(config) {
-    if (!postgresConnection_.connect()) {
-        throw std::runtime_error("Failed to connect to PostgreSQL database");
+JSONGenerator::JSONGenerator(const ClickHouseConnection::Config& config)
+    : clickhouseConnection_(config) {
+    if (!clickhouseConnection_.connect()) {
+        throw std::runtime_error("Failed to connect to ClickHouse database");
     }
 }
 
 JSONGenerator::~JSONGenerator() {
-    postgresConnection_.disconnect();
+    clickhouseConnection_.disconnect();
 }
 
 std::string JSONGenerator::generateJSON(const std::string& sessionId) {
-    if (!postgresConnection_.isConnected()) {
+    if (!clickhouseConnection_.isConnected()) {
         return "{\"error\":\"Not connected to database\"}";
     }
     
-    // Query all snapshots for this session
-    std::string sql = "SELECT id, symbol, timestamp_ns, best_bid_price, best_bid_size, best_bid_count, "
-                     "best_ask_price, best_ask_size, best_ask_count, total_orders, bid_level_count, ask_level_count "
-                     "FROM order_book_snapshots WHERE session_id = '" + postgresConnection_.escapeString(sessionId) + "' "
-                     "ORDER BY timestamp_ns ASC";
-    
-    auto result = postgresConnection_.execute(sql);
-    if (!result.success) {
-        return "{\"error\":\"Query failed: " + result.errorMessage + "\"}";
-    }
-    
-    return buildJSON(result);
+    return buildJSON(sessionId);
 }
 
 std::string JSONGenerator::generateJSONForSymbol(const std::string& symbol) {
-    if (!postgresConnection_.isConnected()) {
+    if (!clickhouseConnection_.isConnected()) {
         return "{\"error\":\"Not connected to database\"}";
     }
     
-    // Find the latest session for this symbol
-    std::string sql = "SELECT session_id FROM processing_sessions "
-                     "WHERE symbol = '" + postgresConnection_.escapeString(symbol) + "' AND status = 'completed' "
-                     "ORDER BY start_time DESC LIMIT 1";
-    
-    auto result = postgresConnection_.execute(sql);
-    if (!result.success || result.rows.empty()) {
-        return "{\"error\":\"No completed sessions found for symbol\"}";
+    try {
+        auto client = clickhouseConnection_.getClient();
+        if (!client) {
+            return "{\"error\":\"ClickHouse client not available\"}";
+        }
+        
+        // Find the latest session for this symbol
+        std::string query = "SELECT session_id FROM processing_sessions "
+                          "WHERE symbol = '" + symbol + "' AND status = 'completed' "
+                          "ORDER BY start_time DESC LIMIT 1";
+        
+        std::string sessionId;
+        client->Select(query, [&sessionId](const clickhouse::Block& block) {
+            if (block.GetRowCount() > 0) {
+                auto session_col = block[0]->As<clickhouse::ColumnString>();
+                sessionId = session_col->At(0);
+            }
+        });
+        
+        if (sessionId.empty()) {
+            return "{\"error\":\"No completed session found for symbol: " + symbol + "\"}";
+        }
+        
+        return buildJSON(sessionId);
+    } catch (const std::exception& e) {
+        return "{\"error\":\"Query failed: " + std::string(e.what()) + "\"}";
     }
-    
-    std::string sessionId = result.rows[0][0];
-    
-    return generateJSON(sessionId);
 }
 
-std::string JSONGenerator::fetchLevels(const std::string& snapshotId, const std::string& tableName) {
-    std::string sql = "SELECT price, size, count FROM " + tableName + 
-                     " WHERE snapshot_id = " + snapshotId + " ORDER BY level_index ASC";
-    
-    auto result = postgresConnection_.execute(sql);
-    if (!result.success) {
-        return "[]";
-    }
-    
-    nlohmann::json levels = nlohmann::json::array();
-    
-    for (const auto& row : result.rows) {
-        if (row.size() >= 3) {
-            nlohmann::json level;
-            level["price"] = row[0];
-            level["size"] = std::atoi(row[1].c_str());
-            level["count"] = std::atoi(row[2].c_str());
-            levels.push_back(level);
-        }
-    }
-    
-    return levels.dump();
-}
-
-std::string JSONGenerator::buildJSON(const PostgresConnection::QueryResult& snapshotsRes) {
-    if (snapshotsRes.rows.empty()) {
-        return "{\"error\":\"No snapshots found\"}";
-    }
-    
-    // Build newline-delimited JSON output (same format as original)
-    std::stringstream output;
-    
-    for (const auto& row : snapshotsRes.rows) {
-        if (row.size() < 12) continue;
-        
-        nlohmann::json json;
-        
-        std::string snapshotId = row[0];
-        std::string symbol = row[1];
-        std::string timestampNs = row[2];
-        std::string bestBidPrice = row[3];
-        std::string bestBidSize = row[4];
-        std::string bestBidCount = row[5];
-        std::string bestAskPrice = row[6];
-        std::string bestAskSize = row[7];
-        std::string bestAskCount = row[8];
-        std::string totalOrders = row[9];
-        std::string bidLevelCount = row[10];
-        std::string askLevelCount = row[11];
-        
-        json["symbol"] = symbol;
-        json["timestamp"] = timestampNs;
-        json["timestamp_ns"] = std::stoll(timestampNs);
-        
-        // BBO
-        nlohmann::json bbo;
-        if (!bestBidPrice.empty() && bestBidPrice != "-9223372036854775808") {
-            nlohmann::json bid;
-            bid["price"] = bestBidPrice;
-            bid["size"] = std::atoi(bestBidSize.c_str());
-            bid["count"] = std::atoi(bestBidCount.c_str());
-            bbo["bid"] = bid;
-        } else {
-            bbo["bid"] = nullptr;
+std::string JSONGenerator::buildJSON(const std::string& sessionId) {
+    try {
+        auto client = clickhouseConnection_.getClient();
+        if (!client) {
+            return "{\"error\":\"ClickHouse client not available\"}";
         }
         
-        if (!bestAskPrice.empty() && bestAskPrice != "-9223372036854775808") {
-            nlohmann::json ask;
-            ask["price"] = bestAskPrice;
-            ask["size"] = std::atoi(bestAskSize.c_str());
-            ask["count"] = std::atoi(bestAskCount.c_str());
-            bbo["ask"] = ask;
-        } else {
-            bbo["ask"] = nullptr;
-        }
-        json["bbo"] = bbo;
+        // Query all snapshots for this session with bid/ask levels
+        std::string query = "SELECT symbol, timestamp_ns, best_bid_price, best_bid_size, best_bid_count, "
+                          "best_ask_price, best_ask_size, best_ask_count, total_orders, "
+                          "bid_level_count, ask_level_count, bid_levels, ask_levels "
+                          "FROM order_book_snapshots WHERE session_id = '" + sessionId + "' "
+                          "ORDER BY timestamp_ns ASC";
         
-        // Levels
-        nlohmann::json levels;
-        std::string bidsJson = fetchLevels(snapshotId, "bid_levels");
-        std::string asksJson = fetchLevels(snapshotId, "ask_levels");
+        std::stringstream jsonOutput;
+        bool firstRow = true;
         
-        levels["bids"] = nlohmann::json::parse(bidsJson);
-        levels["asks"] = nlohmann::json::parse(asksJson);
-        json["levels"] = levels;
+        client->Select(query, [&jsonOutput, &firstRow](const clickhouse::Block& block) {
+            if (block.GetRowCount() == 0) return;
+            
+            // Extract columns
+            auto symbol_col = block[0]->As<clickhouse::ColumnString>();
+            auto timestamp_col = block[1]->As<clickhouse::ColumnInt64>();
+            auto best_bid_price_col = block[2]->As<clickhouse::ColumnInt64>();
+            auto best_bid_size_col = block[3]->As<clickhouse::ColumnUInt32>();
+            auto best_bid_count_col = block[4]->As<clickhouse::ColumnUInt32>();
+            auto best_ask_price_col = block[5]->As<clickhouse::ColumnInt64>();
+            auto best_ask_size_col = block[6]->As<clickhouse::ColumnUInt32>();
+            auto best_ask_count_col = block[7]->As<clickhouse::ColumnUInt32>();
+            auto total_orders_col = block[8]->As<clickhouse::ColumnUInt64>();
+            auto bid_level_count_col = block[9]->As<clickhouse::ColumnUInt32>();
+            auto ask_level_count_col = block[10]->As<clickhouse::ColumnUInt32>();
+            auto bid_levels_col = block[11]->As<clickhouse::ColumnArray>();
+            auto ask_levels_col = block[12]->As<clickhouse::ColumnArray>();
+            
+            // Process each row
+            for (size_t i = 0; i < block.GetRowCount(); ++i) {
+                if (!firstRow) {
+                    jsonOutput << "\n";
+                }
+                firstRow = false;
+                
+                nlohmann::json record;
+                record["symbol"] = symbol_col->At(i);
+                record["timestamp"] = std::to_string(timestamp_col->At(i));
+                record["timestamp_ns"] = timestamp_col->At(i);
+                
+                // BBO
+                nlohmann::json bbo;
+                nlohmann::json bid;
+                bid["price"] = std::to_string(best_bid_price_col->At(i));
+                bid["size"] = best_bid_size_col->At(i);
+                bid["count"] = best_bid_count_col->At(i);
+                
+                nlohmann::json ask;
+                ask["price"] = std::to_string(best_ask_price_col->At(i));
+                ask["size"] = best_ask_size_col->At(i);
+                ask["count"] = best_ask_count_col->At(i);
+                
+                bbo["bid"] = bid;
+                bbo["ask"] = ask;
+                record["bbo"] = bbo;
+                
+                // Levels - extract from array columns
+                nlohmann::json levels;
+                nlohmann::json bids = nlohmann::json::array();
+                nlohmann::json asks = nlohmann::json::array();
+                
+                // Get bid levels array for this row
+                auto bid_array = bid_levels_col->GetAsColumn(i);
+                auto bid_tuple = bid_array->As<clickhouse::ColumnTuple>();
+                if (bid_tuple && bid_tuple->Size() > 0) {
+                    auto bid_prices = (*bid_tuple)[0]->As<clickhouse::ColumnInt64>();
+                    auto bid_sizes = (*bid_tuple)[1]->As<clickhouse::ColumnUInt32>();
+                    auto bid_counts = (*bid_tuple)[2]->As<clickhouse::ColumnUInt32>();
+                    
+                    for (size_t j = 0; j < bid_prices->Size(); ++j) {
+                        nlohmann::json level;
+                        level["price"] = std::to_string(bid_prices->At(j));
+                        level["size"] = bid_sizes->At(j);
+                        level["count"] = bid_counts->At(j);
+                        bids.push_back(level);
+                    }
+                }
+                
+                // Get ask levels array for this row
+                auto ask_array = ask_levels_col->GetAsColumn(i);
+                auto ask_tuple = ask_array->As<clickhouse::ColumnTuple>();
+                if (ask_tuple && ask_tuple->Size() > 0) {
+                    auto ask_prices = (*ask_tuple)[0]->As<clickhouse::ColumnInt64>();
+                    auto ask_sizes = (*ask_tuple)[1]->As<clickhouse::ColumnUInt32>();
+                    auto ask_counts = (*ask_tuple)[2]->As<clickhouse::ColumnUInt32>();
+                    
+                    for (size_t j = 0; j < ask_prices->Size(); ++j) {
+                        nlohmann::json level;
+                        level["price"] = std::to_string(ask_prices->At(j));
+                        level["size"] = ask_sizes->At(j);
+                        level["count"] = ask_counts->At(j);
+                        asks.push_back(level);
+                    }
+                }
+                
+                levels["bids"] = bids;
+                levels["asks"] = asks;
+                record["levels"] = levels;
+                
+                // Stats
+                nlohmann::json stats;
+                stats["total_orders"] = total_orders_col->At(i);
+                stats["bid_levels"] = bid_level_count_col->At(i);
+                stats["ask_levels"] = ask_level_count_col->At(i);
+                record["stats"] = stats;
+                
+                jsonOutput << record.dump();
+            }
+        });
         
-        // Stats
-        nlohmann::json stats;
-        stats["total_orders"] = std::stoull(totalOrders);
-        stats["bid_levels"] = std::stoull(bidLevelCount);
-        stats["ask_levels"] = std::stoull(askLevelCount);
-        json["stats"] = stats;
+        return jsonOutput.str();
         
-        output << json.dump() << "\n";
+    } catch (const std::exception& e) {
+        return "{\"error\":\"Failed to build JSON: " + std::string(e.what()) + "\"}";
     }
-    
-    return output.str();
 }
 
 } // namespace project
