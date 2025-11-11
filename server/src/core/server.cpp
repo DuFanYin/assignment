@@ -4,23 +4,22 @@
 #include "database/clickhouse_connection.hpp"
 #include "database/database_writer.hpp"
 #include "database/json_generator.hpp"
-#include <databento/dbn_file_store.hpp>
+#include "project/streaming_readable.hpp"
+#include <databento/dbn_decoder.hpp>
 #include <databento/record.hpp>
 #include <fstream>
 #include <sstream>
-#include <filesystem>
 #include <functional>
 #include <thread>
 #include <random>
 #include <algorithm>
 #include <cmath>
-#include <unistd.h>  // for unlink
-#include <fcntl.h>   // for O_TMPFILE (if available)
 // Use JSON from databento dependencies
 #include <nlohmann/json.hpp>
 
 // Include uWebSockets
 #include "src/App.h"
+#include "src/Loop.h"
 
 namespace db = databento;
 
@@ -68,13 +67,11 @@ bool WebSocketServer::start() {
         return false;
     }
     
-    // Note: Database writer thread is started per-cycle in startProcessingThread()
-    // We don't start it here to allow multiple cycles
+    // Database writer thread started per-cycle in startProcessingThread() to allow multiple cycles
     
-    // Start uWebSockets server
-    // DISABLE compression for binary data - DBN files are already compressed, compression adds CPU overhead
+    // Start uWebSockets server - compression disabled (DBN files already compressed)
     uWS::App().ws<WebSocketServer::PerSocketData>("/*", {
-        .compression = uWS::CompressOptions(uWS::DISABLED),  // Disabled for speed - binary data already compressed
+        .compression = uWS::CompressOptions(uWS::DISABLED),
         .maxPayloadLength = kMaxPayloadLength,
         .idleTimeout = 16,
         .maxBackpressure = kMaxPayloadLength,
@@ -90,12 +87,15 @@ bool WebSocketServer::start() {
             data->fileName.clear();
             data->fileSize = 0;
             data->isProcessingStarted = false;
-            data->dbnBuffer.clear();
-            data->lastProgressUpdate = 0;
+            data->streamState.reset();
             
-            // Store callback to send messages from processing thread
-            data->sendMessage = [ws](const std::string& message) {
-                ws->send(message, uWS::OpCode::TEXT, false);
+            // Thread-safe send callback: capture loop from event loop thread, defer sends to event loop
+            auto* loop = uWS::Loop::get();
+            data->sendMessage = [ws, loop](const std::string& message) {
+                if (!loop) return;
+                loop->defer([ws, msg = std::string(message)]() {
+                    ws->send(msg, uWS::OpCode::TEXT, false);
+                });
             };
             
             // Send connection confirmation
@@ -124,11 +124,13 @@ bool WebSocketServer::start() {
                     uploadStartTime_ = std::chrono::steady_clock::now();
                     uploadEndTime_ = {};
                     
-                    // Pre-allocate in-memory buffer (no temp file!)
-                    data->dbnBuffer.clear();
-                    data->dbnBuffer.reserve(data->fileSize);
+                    // Initialize streaming state
+                    data->streamState = std::make_shared<StreamingBufferState>();
                     data->bytesReceived = 0;
-                    data->lastProgressUpdate = 0;
+                    
+                    // Start processing immediately - processing thread reads from buffer as chunks arrive
+                    data->isProcessingStarted = true;
+                    startProcessingThread(data->streamState, data->fileSize, data->fileName, data->sendMessage);
                     
                     // No response needed - client starts sending immediately
                     return;
@@ -143,39 +145,23 @@ bool WebSocketServer::start() {
                     return;
                 }
                 
-                // Append chunk to in-memory buffer (optimized - reserve space to avoid reallocations)
-                // Check if we need to grow the buffer
-                if (data->dbnBuffer.size() + message.size() > data->dbnBuffer.capacity()) {
-                    // Grow by at least 50% or enough for this message
-                    size_t newCapacity = std::max(
-                        data->dbnBuffer.capacity() * 3 / 2,
-                        data->dbnBuffer.size() + message.size()
-                    );
-                    data->dbnBuffer.reserve(newCapacity);
+                if (!data->streamState) {
+                    data->streamState = std::make_shared<StreamingBufferState>();
                 }
-                // Direct append (faster than insert)
-                data->dbnBuffer.insert(data->dbnBuffer.end(), message.begin(), message.end());
+                
+                // Append chunk to streaming buffer - processing thread is already running and will consume it
+                data->streamState->append(reinterpret_cast<const uint8_t*>(message.data()), message.size());
                 data->bytesReceived += message.size();
                 totalBytesReceived_ += message.size();
                 
-                // No progress updates during upload (reduces WebSocket overhead)
-                // Frontend can calculate progress locally based on chunks sent
+                // No progress updates during upload - frontend calculates progress locally
                 
-                // Check if file upload is complete and automatically start processing
-                if (!data->isProcessingStarted && data->bytesReceived >= data->fileSize && data->fileSize > 0) {
-                    // Mark upload end time
+                // File upload complete - signal end of stream to processing thread
+                if (data->bytesReceived >= data->fileSize && data->fileSize > 0) {
                     uploadEndTime_ = std::chrono::steady_clock::now();
-                    data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
-                    
-                    // Send status update
-                    nlohmann::json status;
-                    status["type"] = "stats";
-                    status["status"] = "Processing file...";
-                    status["messagesProcessed"] = 0;
-                    ws->send(status.dump(), uWS::OpCode::TEXT, false);
-                    
-                    // Start processing (move buffer ownership to processing thread)
-                    startProcessingThread(std::move(data->dbnBuffer), data->sendMessage);
+                    if (data->streamState) {
+                        data->streamState->finish();
+                    }
                 }
             }
         },
@@ -184,11 +170,16 @@ bool WebSocketServer::start() {
             (void)message;
             auto *data = ws->getUserData();
             
-            // Safety fallback: Process any remaining data if not already processing
-            // (This should rarely trigger since processing auto-starts when upload completes)
-            if (!data->isProcessingStarted && !data->dbnBuffer.empty() && data->fileSize > 0) {
-                data->isProcessingStarted = true;  // Mark as started to prevent duplicate processing
-                startProcessingThread(std::move(data->dbnBuffer), data->sendMessage);
+            // Safety fallback: start processing if not started, signal end of stream if upload incomplete
+            if (!data->isProcessingStarted && data->streamState && data->fileSize > 0) {
+                data->isProcessingStarted = true;
+                uploadEndTime_ = std::chrono::steady_clock::now();
+                data->streamState->finish();
+                startProcessingThread(data->streamState, data->fileSize, data->fileName, data->sendMessage);
+            } else if (data->streamState) {
+                // Processing already started - just signal end of stream
+                uploadEndTime_ = std::chrono::steady_clock::now();
+                data->streamState->finish();
             }
             
             // No temp file cleanup needed - all in memory!
@@ -288,37 +279,21 @@ bool WebSocketServer::start() {
     return true;
 }
 
-void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
-                                           const std::function<void(const std::string&)>& sendMessage) {
-    if (dbnData.empty()) {
+void WebSocketServer::processDbnStream(const std::shared_ptr<StreamingBufferState>& streamState,
+                                       size_t expectedSize,
+                                       const std::string& fileName,
+                                       const std::function<void(const std::string&)>& sendMessage) {
+    if (!streamState) {
+        utils::logError("Streaming state is null. Cannot process DBN stream.");
         return;
     }
     
     try {
-        // Create temporary file in /tmp (often tmpfs/RAM on Linux, fast on macOS)
-        // Write data, then parse immediately - OS will keep it in page cache
-        std::filesystem::path tempDir = std::filesystem::temp_directory_path();
-        std::string tempPath = (tempDir / ("dbn_processing_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dbn")).string();
+        auto reader = std::make_unique<StreamingReadable>(streamState);
+        databento::DbnDecoder decoder(databento::ILogReceiver::Default(), std::move(reader));
         
-        // Write buffer to temp file (one-time write, no chunk-by-chunk I/O)
-        {
-            std::ofstream tempFile(tempPath, std::ios::binary);
-            if (!tempFile.is_open()) {
-                throw std::runtime_error("Failed to create temporary processing file");
-            }
-            tempFile.write(reinterpret_cast<const char*>(dbnData.data()), dbnData.size());
-            tempFile.close();
-        }
-        
-        // Use DbnFileStore to parse the file (reads from OS page cache, effectively memory)
-        db::DbnFileStore store(tempPath);
-        
-        // Unlink immediately after opening - file stays in memory via open file descriptor
-        // This eliminates disk I/O after initial write (which is in page cache anyway)
-        unlink(tempPath.c_str());
-        
-        // Extract symbol from DBN file metadata
-        auto metadata = store.GetMetadata();
+        // Extract metadata directly from stream
+        auto metadata = decoder.DecodeMetadata();
         if (!metadata.symbols.empty()) {
             symbol_ = metadata.symbols[0];  // Use first symbol from the file
             orderBook_->setSymbol(symbol_);
@@ -329,7 +304,9 @@ void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
         // Start database session before processing
         if (databaseWriter_ && !symbol_.empty()) {
             try {
-                databaseWriter_->startSession(symbol_, "upload.dbn", dbnData.size());
+                const std::string sessionFileName = fileName.empty() ? "upload.dbn" : fileName;
+                const std::size_t payloadSize = expectedSize > 0 ? expectedSize : streamState->totalBytes();
+                databaseWriter_->startSession(symbol_, sessionFileName, payloadSize);
                 activeSessionId_ = databaseWriter_->getCurrentSessionId();  // Cache it - never touch databaseWriter_ again from this thread
             } catch (const std::exception& e) {
                 utils::logError("Failed to start database session: " + std::string(e.what()));
@@ -343,12 +320,21 @@ void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
         processingTimingSamples_ = 0;
         processingTimingReservoir_.clear();
         
+        // Send initial status - processing has started (streaming mode)
+        if (sendMessage) {
+            nlohmann::json status;
+            status["type"] = "stats";
+            status["status"] = "Processing file (streaming)...";
+            status["messagesProcessed"] = 0;
+            sendMessage(status.dump());
+        }
+        
         // Start timing when parsing begins (first message taken from DBN)
         processingStartTime_ = std::chrono::steady_clock::now();
         
-        // Process all records
+        // Process all records - decoder will block waiting for data as chunks arrive
         const db::Record* record;
-        while ((record = store.NextRecord()) != nullptr) {
+        while ((record = decoder.DecodeRecord()) != nullptr) {
             if (record->RType() == db::RType::Mbo) {
                 const auto& mbo = record->Get<db::MboMsg>();
                 
@@ -455,11 +441,10 @@ void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
         // Signal that processing is complete - DB thread will exit when buffer is empty
         isServerRunning_.store(false, std::memory_order_release);
         
-        // WAIT for DB writes to complete before sending completion message
+        // Wait for DB writes to complete, then update throughput
         if (databaseWriterThread_.joinable()) {
             databaseWriterThread_.join();
         }
-        // Update total throughput now that DB processing has completed
         sessionStats_.throughput = getThroughput();
         
         if (sendMessage) {
@@ -471,9 +456,8 @@ void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
             complete["bytesReceived"] = totalBytesReceived_.load();
             complete["dbWritesPending"] = snapshotRingBuffer_->size();
             complete["sessionId"] = activeSessionId_;
-            // Compute durations on the server side
+            // Compute durations: total from metadata arrival to DB thread completion
             auto zero_tp = std::chrono::steady_clock::time_point{};
-            // Total duration: from metadata arrival to DB thread completion
             double totalDurationSec = 0.0;
             if (uploadStartTime_ > zero_tp && dbEndTime_ > zero_tp && dbEndTime_ > uploadStartTime_) {
                 totalDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - uploadStartTime_).count()) / 1000.0;
@@ -563,21 +547,25 @@ void WebSocketServer::processDbnFromMemory(const std::vector<uint8_t>& dbnData,
             orderBook_->Clear();
         }
         
-        // No cleanup needed - file was already unlinked and only existed in memory
+        // No cleanup needed - streaming buffer will be released automatically
         
     } catch (const std::exception& e) {
-        utils::logError("Error processing DBN file: " + std::string(e.what()));
+        utils::logError("Error processing DBN stream: " + std::string(e.what()));
         
         // End database session with error
         if (databaseWriter_) {
             databaseWriter_->endSession(false, e.what());
+        }
+        isServerRunning_.store(false, std::memory_order_release);
+        if (databaseWriterThread_.joinable()) {
+            databaseWriterThread_.join();
         }
         
         // Send error message to client
         if (sendMessage) {
             nlohmann::json error;
             error["type"] = "error";
-            error["error"] = "Error processing DBN file: " + std::string(e.what());
+            error["error"] = "Error processing DBN stream: " + std::string(e.what());
             sendMessage(error.dump());
         }
     }
@@ -706,19 +694,16 @@ void WebSocketServer::stop() {
 }
 
 double WebSocketServer::getThroughput() const {
-    // Total throughput from metadata arrival through DB thread completion.
+    // Total throughput from metadata arrival through DB thread completion
     if (processingMessagesReceived_ == 0) return 0.0;
     auto zero_tp = std::chrono::steady_clock::time_point{};
-    // Must start from metadata arrival (uploadStartTime_)
     if (uploadStartTime_ <= zero_tp) return 0.0;
-    // Must end when DB thread finishes (dbEndTime_)
     if (dbEndTime_ <= zero_tp || dbEndTime_ <= uploadStartTime_) return 0.0;
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - uploadStartTime_);
     if (duration.count() == 0) return 0.0;
     return static_cast<double>(processingMessagesReceived_) * 1000.0 / static_cast<double>(duration.count());
 }
 
-// removed: getProcessingThroughput
 
 double WebSocketServer::getAverageOrderProcessNs() const {
     if (processingTimingSamples_ == 0) return 0.0;
@@ -751,8 +736,7 @@ double WebSocketServer::getOrderThroughput() const {
 }
 
 double WebSocketServer::getUploadThroughputMsgs() const {
-    // Messages per second between uploadStartTime_ and uploadEndTime_
-    // Use processingMessagesReceived_ (total decoded/processed messages) as the numerator
+    // Messages per second between uploadStartTime_ and uploadEndTime_ (uses processingMessagesReceived_)
     auto zero_tp = std::chrono::steady_clock::time_point{};
     if (!(uploadEndTime_ > uploadStartTime_) || uploadStartTime_ == zero_tp) return 0.0;
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_);
@@ -762,9 +746,16 @@ double WebSocketServer::getUploadThroughputMsgs() const {
     return msgs * 1000.0 / static_cast<double>(duration.count());
 }
 
-// removed: getUploadTimePerMsgMs
 
-void WebSocketServer::startProcessingThread(std::vector<uint8_t>&& dbnData, const std::function<void(const std::string&)>& sendMessage) {
+void WebSocketServer::startProcessingThread(const std::shared_ptr<StreamingBufferState>& streamState,
+                                            size_t expectedSize,
+                                            const std::string& fileName,
+                                            const std::function<void(const std::string&)>& sendMessage) {
+    if (!streamState) {
+        utils::logError("Attempted to start processing without a streaming buffer state.");
+        return;
+    }
+    
     // Once processing starts, it cannot be stopped - runs to completion independently of WebSocket connection
     if (processingThread_.has_value() && processingThread_->joinable()) {
         processingThread_->join();
@@ -785,8 +776,8 @@ void WebSocketServer::startProcessingThread(std::vector<uint8_t>&& dbnData, cons
     });
     // No delay needed - ring buffer handles synchronization automatically
     
-    processingThread_ = std::jthread([this, data = std::move(dbnData), sendMessage](std::stop_token) mutable {
-        processDbnFromMemory(data, sendMessage);
+    processingThread_ = std::jthread([this, streamState, expectedSize, fileName, sendMessage](std::stop_token) {
+        processDbnStream(streamState, expectedSize, fileName, sendMessage);
     });
 }
 

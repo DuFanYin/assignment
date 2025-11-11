@@ -34,6 +34,8 @@ namespace project {
     class JSONGenerator;
 }
 
+class StreamingBufferState;
+
 // Include ClickHouseConnection for Config
 #include "database/clickhouse_connection.hpp"
 
@@ -60,16 +62,17 @@ public:
         std::string fileName;
         size_t fileSize = 0;
         bool isProcessingStarted = false;
-        std::function<void(const std::string&)> sendMessage; // Callback to send messages
+        std::function<void(const std::string&)> sendMessage; // Callback to send messages (thread-safe via loop->defer)
         
-        // In-memory DBN buffer (no temp file!)
-        std::vector<uint8_t> dbnBuffer;
-        size_t lastProgressUpdate = 0;      // Track last progress update size
+        // Streaming state for incremental decoding
+        std::shared_ptr<StreamingBufferState> streamState;
     };
     
 private:
-    void processDbnFromMemory(const std::vector<uint8_t>& dbnData, 
-                              const std::function<void(const std::string&)>& sendMessage = nullptr);
+    void processDbnStream(const std::shared_ptr<StreamingBufferState>& streamState,
+                          size_t expectedSize,
+                          const std::string& fileName,
+                          const std::function<void(const std::string&)>& sendMessage = nullptr);
     void databaseWriterLoop(std::stop_token stopToken);
     
     int port_;
@@ -114,7 +117,6 @@ private:
     static constexpr size_t kStatusUpdateInterval = 1000;  // Update status every 1000 messages
     static constexpr size_t kPriceScaleFactor = 1000000000;  // Price scaling factor (nanos to dollars)
     static constexpr std::chrono::milliseconds kThreadStartupDelay{100};
-    static constexpr std::chrono::seconds kTempFileCleanupDelay{5};
     static constexpr std::chrono::milliseconds kDatabaseWriterSleepMs{1};
     
     // Statistics getters (same as receiver version)
@@ -127,7 +129,10 @@ private:
     double getUploadThroughputMsgs() const;   // chunks/sec
     
     // Helper function to start processing thread
-    void startProcessingThread(std::vector<uint8_t>&& dbnData, const std::function<void(const std::string&)>& sendMessage);
+    void startProcessingThread(const std::shared_ptr<StreamingBufferState>& streamState,
+                               size_t expectedSize,
+                               const std::string& fileName,
+                               const std::function<void(const std::string&)>& sendMessage);
     
     // Session stats captured atomically to pass to DB thread
     struct SessionStats {
