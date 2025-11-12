@@ -11,6 +11,7 @@
 #include <sstream>
 #include <functional>
 #include <thread>
+#include <stop_token>
 #include <random>
 #include <algorithm>
 #include <cmath>
@@ -79,7 +80,7 @@ bool WebSocketServer::start() {
         .resetIdleTimeoutOnSend = false,
         .sendPingsAutomatically = true,
         .upgrade = nullptr,
-        .open = [this](auto *ws) {
+        .open = [](auto *ws) {
             auto *data = ws->getUserData();
             data->totalBytesReceived = 0;
             data->bytesReceived = 0;
@@ -594,8 +595,9 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
     
     MboMessageWrapper wrapper;
     
-    // Continue until processing done AND buffer empty
-    while (isServerRunning_.load(std::memory_order_acquire) || !snapshotRingBuffer_->empty()) {
+    // Continue until processing done AND buffer empty, or stop requested
+    while ((isServerRunning_.load(std::memory_order_acquire) || !snapshotRingBuffer_->empty()) && 
+           !stopToken.stop_requested()) {
         if (snapshotRingBuffer_->try_pop(wrapper)) {
             if (!started) {
                 started = true;
@@ -611,8 +613,9 @@ void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
             // Buffer empty - flush pending batch
             writeBatch();
             
-            // Exit if done
-            if (!isServerRunning_.load(std::memory_order_acquire) && snapshotRingBuffer_->empty()) {
+            // Exit if done or stop requested
+            if ((!isServerRunning_.load(std::memory_order_acquire) && snapshotRingBuffer_->empty()) ||
+                stopToken.stop_requested()) {
                 break;
             }
             

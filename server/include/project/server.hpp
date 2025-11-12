@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <thread>
+#include <stop_token>
 #include <atomic>
 #include <vector>
 #include <chrono>
