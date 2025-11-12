@@ -19,8 +19,8 @@
 #include <nlohmann/json.hpp>
 
 // Include uWebSockets
-#include "src/App.h"
-#include "src/Loop.h"
+#include "App.h"
+#include "Loop.h"
 
 namespace db = databento;
 
@@ -347,8 +347,18 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& stre
                 try {
                     auto applyStart = std::chrono::steady_clock::now();
                     
-                    // Apply to order book
-                    orderBook_->Apply(mbo);
+                    // Normalize price from nanos to cents (2dp format)
+                    // Original price is in nanos (e.g., 64.83 = 64830000000)
+                    // Convert to cents (e.g., 64.83 = 6483) for 2dp storage
+                    // Keep kUndefPrice as-is (special sentinel value for undefined prices)
+                    db::MboMsg normalizedMbo = mbo;
+                    if (normalizedMbo.price != db::kUndefPrice && normalizedMbo.price != 0) {
+                        // Convert nanos to cents: divide by 1e7 (1e9 nanos / 100 cents = 1e7)
+                        normalizedMbo.price = normalizedMbo.price / kNanosToCents;
+                    }
+                    
+                    // Apply normalized message to order book
+                    orderBook_->Apply(normalizedMbo);
                     
                     // Capture snapshot
                     BookSnapshot snap;

@@ -118,7 +118,8 @@ private:
     // Constants
     static constexpr size_t kMaxPayloadLength = 100 * 1024 * 1024;  // 100MB
     static constexpr size_t kStatusUpdateInterval = 1000;  // Update status every 1000 messages
-    static constexpr size_t kPriceScaleFactor = 1000000000;  // Price scaling factor (nanos to dollars)
+    static constexpr size_t kPriceScaleFactor = 100;  // Price scaling factor (cents to dollars, 2dp)
+    static constexpr int64_t kNanosToCents = 10000000;  // Convert nanos to cents (1e9 / 100 = 1e7)
     static constexpr std::chrono::milliseconds kThreadStartupDelay{100};
     static constexpr std::chrono::milliseconds kDatabaseWriterSleepMs{1};
     

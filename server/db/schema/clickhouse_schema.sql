@@ -38,10 +38,10 @@ CREATE TABLE IF NOT EXISTS order_book_snapshots (
     session_id String,
     symbol String,
     timestamp_ns Int64,
-    best_bid_price Int64,
+    best_bid_price Float64,
     best_bid_size UInt32,
     best_bid_count UInt32,
-    best_ask_price Int64,
+    best_ask_price Float64,
     best_ask_size UInt32,
     best_ask_count UInt32,
     total_orders UInt64,
@@ -49,8 +49,9 @@ CREATE TABLE IF NOT EXISTS order_book_snapshots (
     ask_level_count UInt32,
     -- Native arrays: [{"price":123,"size":10,"count":3},...]
     -- No JSON parsing overhead!
-    bid_levels Array(Tuple(price Int64, size UInt32, count UInt32)),
-    ask_levels Array(Tuple(price Int64, size UInt32, count UInt32))
+    -- Prices stored as Float64 with 2 decimal places
+    bid_levels Array(Tuple(price Float64, size UInt32, count UInt32)),
+    ask_levels Array(Tuple(price Float64, size UInt32, count UInt32))
 ) ENGINE = MergeTree()
 ORDER BY (session_id, timestamp_ns)
 PARTITION BY toYYYYMM(toDateTime(timestamp_ns / 1000000000))

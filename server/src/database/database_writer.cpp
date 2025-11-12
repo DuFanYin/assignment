@@ -205,10 +205,10 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
         auto session_col = std::make_shared<clickhouse::ColumnString>();
         auto symbol_col = std::make_shared<clickhouse::ColumnString>();
         auto timestamp_col = std::make_shared<clickhouse::ColumnInt64>();
-        auto best_bid_price = std::make_shared<clickhouse::ColumnInt64>();
+        auto best_bid_price = std::make_shared<clickhouse::ColumnFloat64>();
         auto best_bid_size = std::make_shared<clickhouse::ColumnUInt32>();
         auto best_bid_count = std::make_shared<clickhouse::ColumnUInt32>();
-        auto best_ask_price = std::make_shared<clickhouse::ColumnInt64>();
+        auto best_ask_price = std::make_shared<clickhouse::ColumnFloat64>();
         auto best_ask_size = std::make_shared<clickhouse::ColumnUInt32>();
         auto best_ask_count = std::make_shared<clickhouse::ColumnUInt32>();
         auto total_orders = std::make_shared<clickhouse::ColumnUInt64>();
@@ -216,8 +216,8 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
         auto ask_level_count = std::make_shared<clickhouse::ColumnUInt32>();
         
         // Create tuple columns for array elements
-        // bid_levels: Array(Tuple(price Int64, size UInt32, count UInt32))
-        auto bid_price_col = std::make_shared<clickhouse::ColumnInt64>();
+        // bid_levels: Array(Tuple(price Float64, size UInt32, count UInt32))
+        auto bid_price_col = std::make_shared<clickhouse::ColumnFloat64>();
         auto bid_size_col = std::make_shared<clickhouse::ColumnUInt32>();
         auto bid_count_col = std::make_shared<clickhouse::ColumnUInt32>();
         auto bid_tuple = std::make_shared<clickhouse::ColumnTuple>(
@@ -225,8 +225,8 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
         );
         auto bid_levels = std::make_shared<clickhouse::ColumnArray>(bid_tuple);
         
-        // ask_levels: Array(Tuple(price Int64, size UInt32, count UInt32))
-        auto ask_price_col = std::make_shared<clickhouse::ColumnInt64>();
+        // ask_levels: Array(Tuple(price Float64, size UInt32, count UInt32))
+        auto ask_price_col = std::make_shared<clickhouse::ColumnFloat64>();
         auto ask_size_col = std::make_shared<clickhouse::ColumnUInt32>();
         auto ask_count_col = std::make_shared<clickhouse::ColumnUInt32>();
         auto ask_tuple = std::make_shared<clickhouse::ColumnTuple>(
@@ -243,10 +243,14 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
             session_col->Append(activeSessionId_);
             symbol_col->Append(snap.symbol);
             timestamp_col->Append(static_cast<int64_t>(snap.ts_ns));
-            best_bid_price->Append(static_cast<int64_t>(snap.bid.price));
+            // Convert cents to dollars (2dp) for storage
+            // Handle kUndefPrice (undefined price sentinel) - store as 0.0
+            double bidPrice = (snap.bid.price == db::kUndefPrice) ? 0.0 : static_cast<double>(snap.bid.price) / 100.0;
+            double askPrice = (snap.ask.price == db::kUndefPrice) ? 0.0 : static_cast<double>(snap.ask.price) / 100.0;
+            best_bid_price->Append(bidPrice);
             best_bid_size->Append(static_cast<uint32_t>(snap.bid.size));
             best_bid_count->Append(static_cast<uint32_t>(snap.bid.count));
-            best_ask_price->Append(static_cast<int64_t>(snap.ask.price));
+            best_ask_price->Append(askPrice);
             best_ask_size->Append(static_cast<uint32_t>(snap.ask.size));
             best_ask_count->Append(static_cast<uint32_t>(snap.ask.count));
             total_orders->Append(snap.total_orders);
@@ -254,12 +258,15 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
             ask_level_count->Append(static_cast<uint32_t>(snap.ask_levels));
             
             // Build bid_levels array for this row
-            auto bid_array_price = std::make_shared<clickhouse::ColumnInt64>();
+            auto bid_array_price = std::make_shared<clickhouse::ColumnFloat64>();
             auto bid_array_size = std::make_shared<clickhouse::ColumnUInt32>();
             auto bid_array_count = std::make_shared<clickhouse::ColumnUInt32>();
             
             for (const auto& level : snap.bids) {
-                bid_array_price->Append(static_cast<int64_t>(level.price));
+                // Convert cents to dollars (2dp) for storage
+                // Handle kUndefPrice - store as 0.0
+                double price = (level.price == db::kUndefPrice) ? 0.0 : static_cast<double>(level.price) / 100.0;
+                bid_array_price->Append(price);
                 bid_array_size->Append(static_cast<uint32_t>(level.size));
                 bid_array_count->Append(static_cast<uint32_t>(level.count));
             }
@@ -270,12 +277,15 @@ bool DatabaseWriter::writeBatch(const std::vector<MboMessageWrapper>& batch) {
             bid_levels->AppendAsColumn(bid_row_tuple);
             
             // Build ask_levels array for this row
-            auto ask_array_price = std::make_shared<clickhouse::ColumnInt64>();
+            auto ask_array_price = std::make_shared<clickhouse::ColumnFloat64>();
             auto ask_array_size = std::make_shared<clickhouse::ColumnUInt32>();
             auto ask_array_count = std::make_shared<clickhouse::ColumnUInt32>();
             
             for (const auto& level : snap.asks) {
-                ask_array_price->Append(static_cast<int64_t>(level.price));
+                // Convert cents to dollars (2dp) for storage
+                // Handle kUndefPrice - store as 0.0
+                double price = (level.price == db::kUndefPrice) ? 0.0 : static_cast<double>(level.price) / 100.0;
+                ask_array_price->Append(price);
                 ask_array_size->Append(static_cast<uint32_t>(level.size));
                 ask_array_count->Append(static_cast<uint32_t>(level.count));
             }

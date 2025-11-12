@@ -84,10 +84,10 @@ std::string JSONGenerator::buildJSON(const std::string& sessionId) {
             // Extract columns
             auto symbol_col = block[0]->As<clickhouse::ColumnString>();
             auto timestamp_col = block[1]->As<clickhouse::ColumnInt64>();
-            auto best_bid_price_col = block[2]->As<clickhouse::ColumnInt64>();
+            auto best_bid_price_col = block[2]->As<clickhouse::ColumnFloat64>();
             auto best_bid_size_col = block[3]->As<clickhouse::ColumnUInt32>();
             auto best_bid_count_col = block[4]->As<clickhouse::ColumnUInt32>();
-            auto best_ask_price_col = block[5]->As<clickhouse::ColumnInt64>();
+            auto best_ask_price_col = block[5]->As<clickhouse::ColumnFloat64>();
             auto best_ask_size_col = block[6]->As<clickhouse::ColumnUInt32>();
             auto best_ask_count_col = block[7]->As<clickhouse::ColumnUInt32>();
             auto total_orders_col = block[8]->As<clickhouse::ColumnUInt64>();
@@ -108,15 +108,19 @@ std::string JSONGenerator::buildJSON(const std::string& sessionId) {
                 record["timestamp"] = std::to_string(timestamp_col->At(i));
                 record["timestamp_ns"] = timestamp_col->At(i);
                 
-                // BBO
+                // BBO - prices already stored as Float64 with 2dp, format directly
                 nlohmann::json bbo;
                 nlohmann::json bid;
-                bid["price"] = std::to_string(best_bid_price_col->At(i));
+                char bidPriceStr[32];
+                snprintf(bidPriceStr, sizeof(bidPriceStr), "%.2f", best_bid_price_col->At(i));
+                bid["price"] = bidPriceStr;
                 bid["size"] = best_bid_size_col->At(i);
                 bid["count"] = best_bid_count_col->At(i);
                 
                 nlohmann::json ask;
-                ask["price"] = std::to_string(best_ask_price_col->At(i));
+                char askPriceStr[32];
+                snprintf(askPriceStr, sizeof(askPriceStr), "%.2f", best_ask_price_col->At(i));
+                ask["price"] = askPriceStr;
                 ask["size"] = best_ask_size_col->At(i);
                 ask["count"] = best_ask_count_col->At(i);
                 
@@ -133,13 +137,16 @@ std::string JSONGenerator::buildJSON(const std::string& sessionId) {
                 auto bid_array = bid_levels_col->GetAsColumn(i);
                 auto bid_tuple = bid_array->As<clickhouse::ColumnTuple>();
                 if (bid_tuple && bid_tuple->Size() > 0) {
-                    auto bid_prices = (*bid_tuple)[0]->As<clickhouse::ColumnInt64>();
+                    auto bid_prices = (*bid_tuple)[0]->As<clickhouse::ColumnFloat64>();
                     auto bid_sizes = (*bid_tuple)[1]->As<clickhouse::ColumnUInt32>();
                     auto bid_counts = (*bid_tuple)[2]->As<clickhouse::ColumnUInt32>();
                     
                     for (size_t j = 0; j < bid_prices->Size(); ++j) {
                         nlohmann::json level;
-                        level["price"] = std::to_string(bid_prices->At(j));
+                        // Prices already stored as Float64 with 2dp, format directly
+                        char priceStr[32];
+                        snprintf(priceStr, sizeof(priceStr), "%.2f", bid_prices->At(j));
+                        level["price"] = priceStr;
                         level["size"] = bid_sizes->At(j);
                         level["count"] = bid_counts->At(j);
                         bids.push_back(level);
@@ -150,13 +157,16 @@ std::string JSONGenerator::buildJSON(const std::string& sessionId) {
                 auto ask_array = ask_levels_col->GetAsColumn(i);
                 auto ask_tuple = ask_array->As<clickhouse::ColumnTuple>();
                 if (ask_tuple && ask_tuple->Size() > 0) {
-                    auto ask_prices = (*ask_tuple)[0]->As<clickhouse::ColumnInt64>();
+                    auto ask_prices = (*ask_tuple)[0]->As<clickhouse::ColumnFloat64>();
                     auto ask_sizes = (*ask_tuple)[1]->As<clickhouse::ColumnUInt32>();
                     auto ask_counts = (*ask_tuple)[2]->As<clickhouse::ColumnUInt32>();
                     
                     for (size_t j = 0; j < ask_prices->Size(); ++j) {
                         nlohmann::json level;
-                        level["price"] = std::to_string(ask_prices->At(j));
+                        // Prices already stored as Float64 with 2dp, format directly
+                        char priceStr[32];
+                        snprintf(priceStr, sizeof(priceStr), "%.2f", ask_prices->At(j));
+                        level["price"] = priceStr;
                         level["size"] = ask_sizes->At(j);
                         level["count"] = ask_counts->At(j);
                         asks.push_back(level);
