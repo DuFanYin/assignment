@@ -44,6 +44,7 @@ private:
     // Helper functions
     std::string generateSessionId() const;
     bool insertSession(const std::string& symbol, const std::string& fileName, size_t fileSize);
+    void configureClientForBulkInserts();
 };
 
 } // namespace project

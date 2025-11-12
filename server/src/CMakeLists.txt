@@ -37,7 +37,7 @@ add_library(core_lib
     core/config.cpp
     core/utils.cpp
     core/server.cpp
-    core/streaming_readable.cpp
+    streamer/streamer.cpp
 )
 
 target_include_directories(core_lib PUBLIC

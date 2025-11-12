@@ -22,6 +22,7 @@ DatabaseWriter::DatabaseWriter(const ClickHouseConnection::Config& config)
         }
         throw std::runtime_error(ss.str());
     }
+    configureClientForBulkInserts();
 }
 
 DatabaseWriter::~DatabaseWriter() {
@@ -40,6 +41,29 @@ std::string DatabaseWriter::generateSessionId() const {
     std::stringstream ss;
     ss << "session_" << ms << "_" << dis(gen);
     return ss.str();
+}
+
+void DatabaseWriter::configureClientForBulkInserts() {
+    auto* client = clickhouseConnection_.getClient();
+    if (!client) {
+        utils::logWarning("ClickHouse client unavailable; bulk insert optimizations skipped");
+        return;
+    }
+    
+    const std::vector<std::string> settings = {
+        "SET async_insert=1",
+        "SET wait_for_async_insert=0",
+        "SET insert_quorum=0",
+        "SET max_insert_block_size=200000"
+    };
+    
+    for (const auto& setting : settings) {
+        try {
+            client->Execute(setting);
+        } catch (const std::exception& e) {
+            utils::logWarning("Failed to apply ClickHouse setting '" + setting + "': " + e.what());
+        }
+    }
 }
 
 void DatabaseWriter::startSession(const std::string& symbol, const std::string& fileName, size_t fileSize) {

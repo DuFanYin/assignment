@@ -81,8 +81,6 @@ clickhouse.password=your_password
 clickhouse.compression=true
 ```
 
-**Important:** Ensure ClickHouse is running before starting the server. The script will automatically create the database and tables if they don't exist.
-
 ### Start Server
 
 Use the convenience script:
@@ -93,18 +91,8 @@ cd server
 ./scripts/start.sh run      # Subsequent runs: just start the server
 ```
 
-Or from the project root:
-
-```bash
-./server/scripts/start.sh build    # First time: build dependencies and project
-./server/scripts/start.sh run      # Subsequent runs: just start the server
-```
-
 ## Architecture
 
-### Overview
-
-The server processes DBN files containing market-by-order (MBO) messages using **true streaming architecture**: processing starts immediately after metadata is received and processes chunks as they arrive over WebSocket. The server maintains an in-memory order book, captures snapshots after each update, and stores them in ClickHouse. The architecture uses a per-cycle threading model where each file upload spawns dedicated processing and database writer threads that run to completion. **No temporary files are used** - all processing happens in memory with parallel upload and processing.
 
 ### Threading Model
 
@@ -118,6 +106,18 @@ The server uses a per-cycle multi-threaded architecture with **true streaming pr
 - Database writer thread spawns at cycle start
 - Both threads run to completion
 - Next cycle can start after previous cycle completes
+
+WebSocket Thread (Event Loop)
+    ↓ (writes binary chunks)
+StreamingBuffer (shared buffer)
+    ↓ (reads chunks)
+Processing Thread
+    ↓ (pushes snapshots)
+RingBuffer<MboMessageWrapper>
+    ↓ (pops snapshots)
+Database Writer Thread
+    ↓ (batch inserts)
+ClickHouse Database
 
 ### Data Flow
 
@@ -202,94 +202,6 @@ User Browser
 9. **User downloads JSON** via download button (queries database on-demand)
 10. **Next cycle** can start when user uploads another file
 
-## Implementation Details
-
-### Thread Synchronization & Delegation
-
-The architecture uses **true streaming** with **delegation via ring buffer** to separate processing from database I/O:
-
-1. **Processing Thread** (`std::optional<std::jthread>`):
-   - Spawns per-cycle **immediately after metadata received** (doesn't wait for full file)
-   - Uses `StreamingReadable` (implements `databento::IReadable`) to read from `StreamingBufferState`
-   - `DbnDecoder` blocks in `ReadSome()` waiting for chunks as they arrive
-   - Applies MBO messages to order book as records are decoded
-   - Captures snapshot after each message
-   - Pushes snapshot to lock-free ring buffer (non-blocking when space available)
-   - Never writes to database directly - pure in-memory operations
-   - Processing happens **in parallel with file upload** (true streaming)
-   - Waits for DB thread to complete before sending completion message
-   - Sends status updates via thread-safe `loop->defer()` (schedules on event loop thread)
-   - Captures session statistics into `SessionStats` struct with memory fences
-   - Stored in `processingThread_` member variable for proper lifecycle management
-   - Cannot be stopped once started - runs to completion
-   - Clears order book after processing completes
-
-2. **Database Writer Thread** (`std::jthread`, per-cycle):
-   - Spawns per-cycle in `startProcessingThread()` before processing thread
-   - Pops snapshots from ring buffer in batches (blocking wait when empty)
-   - Writes snapshots to ClickHouse using native Block inserts (columnar format)
-   - ClickHouse uses sparse indexes automatically - no manual index management needed
-   - Updates session statistics and final book state
-   - Exits after cycle completes (when processing done AND buffer empty)
-   - Next cycle spawns a new database writer thread
-
-**Streaming Architecture:**
-- `StreamingBufferState`: Thread-safe chunk queue using `std::deque<std::vector<std::byte>>`
-- Uses mutex + condition variable for producer/consumer synchronization
-- WebSocket thread (producer) appends chunks, processing thread (consumer) reads chunks
-- `StreamingReadable`: Implements `databento::IReadable` interface
-- `ReadSome()` blocks waiting for chunks if buffer is empty (true streaming behavior)
-- No temporary files - all processing happens in memory
-
-**Ring Buffer Implementation:**
-- Lock-free SPSC (Single Producer Single Consumer) queue
-- C++20 atomics with `wait/notify` for efficient blocking
-- Producer pushes, consumer pops - no mutex contention
-- Power-of-2 size with bitmask indexing for fast modulo
-- Cache-line aligned read/write positions to avoid false sharing
-
-**Database Session Management:**
-- Each upload cycle creates a unique session ID in database
-- Session tracks: file metadata, statistics, snapshots, final state
-- Multiple sessions can exist concurrently in database
-- Session ID is returned to frontend for JSON download
-- Each cycle has its own database writer thread that manages the session lifecycle
-
-**JSON Generation:**
-- On-demand generation (not during processing)
-- Queries database by session_id to retrieve snapshots
-- Generates newline-delimited JSON format
-- Served via HTTP endpoint with session-specific download
-
-### Performance Optimizations
-
-**Threading & Concurrency:**
-- True streaming: processing starts immediately after metadata, processes chunks as they arrive
-- Thread-safe WebSocket messaging via `loop->defer()` (schedules sends on event loop thread)
-- Lock-free SPSC ring buffer with C++20 atomics (wait/notify)
-- Cache-line aligned read/write positions (64-byte alignment)
-- Power-of-2 ring buffer size for fast modulo via bitmask
-- Memory fences for proper cross-thread synchronization
-- Processing thread blocks only when waiting for chunks (streaming behavior)
-- No temporary files - all data stays in memory
-
-**Database Performance:**
-- **Native Array Storage**: ClickHouse native `Array(Tuple(...))` types instead of JSONB (no parsing overhead)
-- **Columnar Storage**: MergeTree engine optimized for time-series data with automatic compression
-- **Block Inserts**: Native ClickHouse Block API for efficient bulk inserts
-- **Automatic Indexing**: Sparse indexes managed automatically by ClickHouse (no manual index management)
-- **No WAL Overhead**: ClickHouse's columnar design eliminates traditional WAL bottlenecks
-- Batch processing in large chunks for optimal throughput
-
-**Memory & CPU:**
-- Streaming buffer: chunks stored in `std::deque` (efficient append/consume)
-- No temporary file I/O - all processing in memory
-- Efficient snapshot structure with minimal heap allocations
-- Fixed-size top-N levels (configured via `server.top_levels`)
-- On-demand JSON generation (only when user downloads)
-- Modern C++20 jthread for automatic thread cleanup
-- WebSocket compression disabled (DBN files already compressed)
-
 ## Database Schema
 
 **`processing_sessions`**
@@ -349,4 +261,57 @@ Each JSON record contains:
 - `bbo.bid/ask`: Best bid/offer with price, size, and order count
 - `levels.bids/asks`: Top-N price levels (N = `top_levels` from config)
 - `stats`: Order book statistics at this snapshot
+
+## Performance Metrics
+
+The server reports detailed performance metrics after each file processing session. These metrics help understand where time is spent and identify bottlenecks:
+
+### Throughput Metrics
+
+**Total Throughput (entire session)** - `totalThroughput` (msg/s)
+- **What it measures**: End-to-end message processing rate from upload start to database completion
+- **Time window**: From metadata arrival (`uploadStartTime_`) through database writer thread completion (`dbEndTime_`)
+- **Formula**: `processingMessagesReceived / (dbEndTime - uploadStartTime)`
+- **Use case**: Overall system performance indicator - lower values indicate bottlenecks in upload, processing, or database writes
+
+**Upload Throughput (Network I/O speed)** - `uploadThroughputMBps` (MB/s)
+- **What it measures**: Network transfer rate - how fast file data is received over WebSocket in megabytes per second
+- **Time window**: From metadata arrival (`uploadStartTime_`) to final chunk received (`uploadEndTime_`)
+- **Formula**: `(uploadBytesReceived / (1024 * 1024)) / (uploadEndTime - uploadStartTime)`
+- **Use case**: Measures network bandwidth utilization and upload efficiency. Shows actual data transfer speed. Affected by network speed, chunk size, and WebSocket overhead. Typical localhost speeds: 200-1000+ MB/s
+
+**Order Throughput (order processing speed)** - `orderThroughput` (orders/s)
+- **What it measures**: Order book update rate - how fast MBO messages are applied to the order book
+- **Time window**: From first record decoded (`processingStartTime_`) to last record processed (`processingEndTime_`)
+- **Formula**: `processingOrdersProcessed / (processingEndTime - processingStartTime)`
+- **Use case**: Measures CPU efficiency of order book operations. Higher values indicate faster order book updates
+
+**DB Throughput (file I/O speed)** - `dbThroughput` (items/s)
+- **What it measures**: Database write rate - how fast snapshots are written to ClickHouse
+- **Time window**: From first snapshot written (`dbStartTime_`) to last snapshot written (`dbEndTime_`)
+- **Formula**: `snapshotsWritten / (dbEndTime - dbStartTime)`
+- **Use case**: Measures database write performance. Affected by ClickHouse performance, batch size, and network latency to database
+
+### Latency Metrics
+
+**Average Process Time** - `averageOrderProcessNs` (nanoseconds)
+- **What it measures**: Average time to process a single MBO message (apply to order book + capture snapshot)
+- **Calculation**: Mean of all individual order processing times
+- **Formula**: `totalProcessingTimeNs / processingTimingSamples`
+- **Use case**: Typical order processing latency. Lower values indicate faster order book operations
+
+**P99 Process Time** - `p99OrderProcessNs` (nanoseconds)
+- **What it measures**: 99th percentile processing time - 99% of orders are processed faster than this value
+- **Calculation**: Uses reservoir sampling to estimate P99 from timing samples
+- **Use case**: Identifies worst-case latency outliers. High P99 values indicate occasional slow operations (e.g., order book rebalancing)
+
+### Understanding the Metrics
+
+**Typical Performance Profile:**
+- **Upload Throughput** is usually the fastest (network is fast, especially on localhost)
+- **Order Throughput** is typically slower than upload (CPU-bound order book operations)
+- **DB Throughput** may be slower if database is remote or under load
+- **Total Throughput** is the slowest (includes all phases: upload + processing + database writes)
+
+**Note**: All timestamps use `std::chrono::steady_clock` for high-precision, monotonic timing that is unaffected by system clock adjustments.
 

@@ -284,10 +284,14 @@ button:disabled {
         
         let ws = null;
         let file = null;
-        let chunkSize = 64 * 1024; // 64KB chunks
+        // Optimized: Larger chunks for better throughput (256KB-1MB depending on file size)
+        // Use adaptive chunk sizing: larger files get larger chunks
+        let chunkSize = 256 * 1024; // Start with 256KB, will adapt
         let currentOffset = 0;
         let messagesProcessed = 0;
         let currentSessionId = null;
+        let pendingChunks = 0; // Track in-flight chunks for backpressure
+        const MAX_PENDING_CHUNKS = 3; // Pipeline up to 3 chunks
         
         // WebSocket server URL
         const wsUrl = `ws://${window.location.hostname}:9001`;
@@ -337,6 +341,11 @@ button:disabled {
             currentOffset = 0;
             messagesProcessed = 0;
             currentSessionId = null;
+            pendingChunks = 0;
+            
+            // Reset progress bar
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
             
             // Hide download section from previous session
             const downloadSection = document.getElementById('downloadSection');
@@ -344,15 +353,19 @@ button:disabled {
                 downloadSection.style.display = 'none';
             }
             
+            // Close any existing WebSocket connection
+            if (ws) {
+                if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+                    ws.close();
+                }
+                ws = null;
+            }
+            
             // Connect WebSocket
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
                 showStatus('Connected to server. Starting upload...', 'info');
-                const notesEl = document.getElementById('notesSection');
-                if (notesEl) {
-                    notesEl.classList.add('show');
-                }
                 stats.classList.add('show');
                 document.getElementById('statConnection').textContent = 'Connected';
                 uploadBtn.disabled = true;
@@ -371,8 +384,17 @@ button:disabled {
                 
                 ws.send(metadataBuffer);
                 
-                // Start sending chunks immediately (no response needed)
-                setTimeout(sendNextChunk, 10);
+                // Optimize chunk size based on file size for better throughput
+                if (file.size > 100 * 1024 * 1024) { // > 100MB
+                    chunkSize = 1024 * 1024; // 1MB chunks for large files
+                } else if (file.size > 10 * 1024 * 1024) { // > 10MB
+                    chunkSize = 512 * 1024; // 512KB chunks for medium files
+                } else {
+                    chunkSize = 256 * 1024; // 256KB chunks for small files
+                }
+                
+                // Start sending chunks immediately (no artificial delay)
+                sendNextChunk();
             };
             
             ws.onmessage = (event) => {
@@ -418,7 +440,7 @@ button:disabled {
                 if (statConnection) {
                     statConnection.textContent = 'Disconnected';
                 }
-                if (currentOffset < file.size) {
+                if (file && currentOffset < file.size) {
                     showStatus('Connection closed unexpectedly.', 'error');
                 }
                 resetUI();
@@ -426,15 +448,36 @@ button:disabled {
         }
         
         function sendNextChunk() {
+            // Safety check: ensure file is available
+            if (!file) {
+                return;
+            }
+            
+            // Backpressure: Don't queue too many chunks at once
+            if (pendingChunks >= MAX_PENDING_CHUNKS) {
+                // Retry after a short delay when backpressure clears
+                setTimeout(() => sendNextChunk(), 10);
+                return;
+            }
+            
             if (!ws || ws.readyState !== WebSocket.OPEN || currentOffset >= file.size) {
                 return;
             }
             
+            // Check WebSocket buffer state (backpressure handling)
+            if (ws.bufferedAmount > 2 * 1024 * 1024) { // If > 2MB buffered, wait
+                setTimeout(() => sendNextChunk(), 5);
+                return;
+            }
+            
+            pendingChunks++;
             const reader = new FileReader();
             const end = Math.min(currentOffset + chunkSize, file.size);
             const chunk = file.slice(currentOffset, end);
             
             reader.onload = (e) => {
+                pendingChunks--;
+                
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     // Send binary chunk
                     ws.send(e.target.result);
@@ -444,12 +487,24 @@ button:disabled {
                     updateProgress(currentOffset, file.size);
                     document.getElementById('statBytes').textContent = formatBytes(currentOffset);
                     
-                    if (currentOffset < file.size) {
-                        // Send next chunk after a small delay to avoid overwhelming
-                        setTimeout(sendNextChunk, 10);
+                    // Continue sending immediately if more data and buffer not full
+                    if (file && currentOffset < file.size) {
+                        // Use microtask for better scheduling (faster than setTimeout, more appropriate than requestAnimationFrame)
+                        if (ws.bufferedAmount < 1024 * 1024) { // < 1MB buffered
+                            // Use Promise.resolve().then() for microtask scheduling
+                            Promise.resolve().then(() => sendNextChunk());
+                        } else {
+                            // Backpressure: small delay if buffer is filling
+                            setTimeout(() => sendNextChunk(), 1);
+                        }
                     }
                     // No completion signal needed - server detects when bytesReceived >= fileSize
                 }
+            };
+            
+            reader.onerror = () => {
+                pendingChunks--;
+                showStatus('Error reading file chunk', 'error');
             };
             
             reader.readAsArrayBuffer(chunk);
@@ -469,9 +524,14 @@ button:disabled {
         function resetUI() {
             uploadBtn.disabled = false;
             if (ws) {
-                ws.close();
+                // Only close if not already closed
+                if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+                    ws.close();
+                }
                 ws = null;
             }
+            // Reset progress bar but keep it visible if upload completed
+            // Progress will be reset on next upload start
         }
         
         function formatBytes(bytes) {
@@ -494,19 +554,19 @@ button:disabled {
             statsHTML += `<tr class="row"><td class="cell-label"><strong>Messages Received:</strong></td><td class="cell-value">${(message.messagesReceived || 0).toLocaleString()}</td></tr>`;
             statsHTML += `<tr class="row"><td class="cell-label"><strong>Orders Processed:</strong></td><td class="cell-value">${(message.ordersProcessed || 0).toLocaleString()}</td></tr>`;
             if (message.totalThroughput) {
-                const totalDur = (typeof message.totalDurationSec === 'number') ? ` (${message.totalDurationSec.toFixed(2)} s)` : '';
+                const totalDur = (typeof message.totalDurationSec === 'number') ? ` (${message.totalDurationSec.toFixed(4)} s)` : '';
                 statsHTML += `<tr class="row"><td class="cell-label"><strong>Total Throughput (entire session):</strong></td><td class="cell-value">${message.totalThroughput.toFixed(0)} msg/s${totalDur}</td></tr>`;
             }
-            if (message.uploadThroughputMsgs) {
-                const uploadDur = (typeof message.uploadDurationSec === 'number') ? ` (${message.uploadDurationSec.toFixed(2)} s)` : '';
-                statsHTML += `<tr class="row"><td class="cell-label"><strong>Upload Throughput (Network I/O speed):</strong></td><td class="cell-value">${message.uploadThroughputMsgs.toFixed(0)} msgs/s${uploadDur}</td></tr>`;
+            if (message.uploadThroughputMBps) {
+                const uploadDur = (typeof message.uploadDurationSec === 'number') ? ` (${message.uploadDurationSec.toFixed(4)} s)` : '';
+                statsHTML += `<tr class="row"><td class="cell-label"><strong>Upload Throughput (Network I/O speed):</strong></td><td class="cell-value">${message.uploadThroughputMBps.toFixed(2)} MB/s${uploadDur}</td></tr>`;
             }
             if (message.orderThroughput) {
-                const procDur = (typeof message.processingDurationSec === 'number') ? ` (${message.processingDurationSec.toFixed(2)} s)` : '';
+                const procDur = (typeof message.processingDurationSec === 'number') ? ` (${message.processingDurationSec.toFixed(4)} s)` : '';
                 statsHTML += `<tr class="row"><td class="cell-label"><strong>Order Throughput (order processing speed):</strong></td><td class="cell-value">${message.orderThroughput.toFixed(0)} orders/s${procDur}</td></tr>`;
             }
             if (message.dbThroughput) {
-                const dbDur = (typeof message.dbDurationSec === 'number') ? ` (${message.dbDurationSec.toFixed(2)} s)` : '';
+                const dbDur = (typeof message.dbDurationSec === 'number') ? ` (${message.dbDurationSec.toFixed(4)} s)` : '';
                 statsHTML += `<tr class="row"><td class="cell-label"><strong>DB Throughput (file I/O speed):</strong></td><td class="cell-value">${message.dbThroughput.toFixed(0)} items/s${dbDur}</td></tr>`;
             }
             if (message.averageOrderProcessNs) {
@@ -550,13 +610,25 @@ button:disabled {
             // Create download UI (always enabled now - complete means DB is done)
             downloadSection.innerHTML = `
                 <div class="download-section">
-                    <div class="session-id">Session ID: ${sessionId}</div>
-                    <button class="download-button" id="downloadBtn" onclick="downloadJSON('${sessionId}')">
+                    <div class="session-id" id="sessionIdDisplay"></div>
+                    <button class="download-button" id="downloadBtn">
                         Download JSON Output
                     </button>
                 </div>
             `;
             downloadSection.style.display = 'block';
+            
+            // Safely set session ID using textContent (prevents XSS)
+            const sessionIdDisplay = document.getElementById('sessionIdDisplay');
+            if (sessionIdDisplay) {
+                sessionIdDisplay.textContent = 'Session ID: ' + sessionId;
+            }
+            
+            // Attach event listener instead of inline onclick
+            const downloadBtn = document.getElementById('downloadBtn');
+            if (downloadBtn) {
+                downloadBtn.addEventListener('click', () => downloadJSON(sessionId));
+            }
         }
         
         function downloadJSON(sessionId) {

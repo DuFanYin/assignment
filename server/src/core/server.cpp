@@ -4,7 +4,7 @@
 #include "database/clickhouse_connection.hpp"
 #include "database/database_writer.hpp"
 #include "database/json_generator.hpp"
-#include "project/streaming_readable.hpp"
+#include "project/streamer.hpp"
 #include <databento/dbn_decoder.hpp>
 #include <databento/record.hpp>
 #include <fstream>
@@ -88,7 +88,7 @@ bool WebSocketServer::start() {
             data->fileName.clear();
             data->fileSize = 0;
             data->isProcessingStarted = false;
-            data->streamState.reset();
+            data->streamBuffer.reset();
             
             // Thread-safe send callback: capture loop from event loop thread, defer sends to event loop
             auto* loop = uWS::Loop::get();
@@ -124,14 +124,15 @@ bool WebSocketServer::start() {
                     // Mark upload start time
                     uploadStartTime_ = std::chrono::steady_clock::now();
                     uploadEndTime_ = {};
+                    uploadBytesReceived_ = 0;  // Reset for new session
                     
-                    // Initialize streaming state
-                    data->streamState = std::make_shared<StreamingBufferState>();
+                    // Initialize streaming buffer
+                    data->streamBuffer = std::make_shared<StreamBuffer>();
                     data->bytesReceived = 0;
                     
                     // Start processing immediately - processing thread reads from buffer as chunks arrive
                     data->isProcessingStarted = true;
-                    startProcessingThread(data->streamState, data->fileSize, data->fileName, data->sendMessage);
+                    startProcessingThread(data->streamBuffer, data->fileSize, data->fileName, data->sendMessage);
                     
                     // No response needed - client starts sending immediately
                     return;
@@ -146,13 +147,14 @@ bool WebSocketServer::start() {
                     return;
                 }
                 
-                if (!data->streamState) {
-                    data->streamState = std::make_shared<StreamingBufferState>();
+                if (!data->streamBuffer) {
+                    data->streamBuffer = std::make_shared<StreamBuffer>();
                 }
                 
                 // Append chunk to streaming buffer - processing thread is already running and will consume it
-                data->streamState->append(reinterpret_cast<const uint8_t*>(message.data()), message.size());
+                data->streamBuffer->appendChunk(reinterpret_cast<const uint8_t*>(message.data()), message.size());
                 data->bytesReceived += message.size();
+                uploadBytesReceived_ += message.size();  // Track bytes for this session
                 totalBytesReceived_ += message.size();
                 
                 // No progress updates during upload - frontend calculates progress locally
@@ -160,8 +162,8 @@ bool WebSocketServer::start() {
                 // File upload complete - signal end of stream to processing thread
                 if (data->bytesReceived >= data->fileSize && data->fileSize > 0) {
                     uploadEndTime_ = std::chrono::steady_clock::now();
-                    if (data->streamState) {
-                        data->streamState->finish();
+                    if (data->streamBuffer) {
+                        data->streamBuffer->markFinished();
                     }
                 }
             }
@@ -172,15 +174,15 @@ bool WebSocketServer::start() {
             auto *data = ws->getUserData();
             
             // Safety fallback: start processing if not started, signal end of stream if upload incomplete
-            if (!data->isProcessingStarted && data->streamState && data->fileSize > 0) {
+            if (!data->isProcessingStarted && data->streamBuffer && data->fileSize > 0) {
                 data->isProcessingStarted = true;
                 uploadEndTime_ = std::chrono::steady_clock::now();
-                data->streamState->finish();
-                startProcessingThread(data->streamState, data->fileSize, data->fileName, data->sendMessage);
-            } else if (data->streamState) {
+                data->streamBuffer->markFinished();
+                startProcessingThread(data->streamBuffer, data->fileSize, data->fileName, data->sendMessage);
+            } else if (data->streamBuffer) {
                 // Processing already started - just signal end of stream
                 uploadEndTime_ = std::chrono::steady_clock::now();
-                data->streamState->finish();
+                data->streamBuffer->markFinished();
             }
             
             // No temp file cleanup needed - all in memory!
@@ -280,17 +282,17 @@ bool WebSocketServer::start() {
     return true;
 }
 
-void WebSocketServer::processDbnStream(const std::shared_ptr<StreamingBufferState>& streamState,
+void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& streamBuffer,
                                        size_t expectedSize,
                                        const std::string& fileName,
                                        const std::function<void(const std::string&)>& sendMessage) {
-    if (!streamState) {
-        utils::logError("Streaming state is null. Cannot process DBN stream.");
+    if (!streamBuffer) {
+        utils::logError("Stream buffer is null. Cannot process DBN stream.");
         return;
     }
     
     try {
-        auto reader = std::make_unique<StreamingReadable>(streamState);
+        auto reader = std::make_unique<StreamReader>(streamBuffer);
         databento::DbnDecoder decoder(databento::ILogReceiver::Default(), std::move(reader));
         
         // Extract metadata directly from stream
@@ -306,7 +308,7 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamingBufferStat
         if (databaseWriter_ && !symbol_.empty()) {
             try {
                 const std::string sessionFileName = fileName.empty() ? "upload.dbn" : fileName;
-                const std::size_t payloadSize = expectedSize > 0 ? expectedSize : streamState->totalBytes();
+                const std::size_t payloadSize = expectedSize > 0 ? expectedSize : streamBuffer->getTotalBytes();
                 databaseWriter_->startSession(symbol_, sessionFileName, payloadSize);
                 activeSessionId_ = databaseWriter_->getCurrentSessionId();  // Cache it - never touch databaseWriter_ again from this thread
             } catch (const std::exception& e) {
@@ -484,7 +486,7 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamingBufferStat
             complete["processingDurationSec"] = processingDurationSec;
             complete["dbThroughput"] = getDbThroughput();
             complete["dbDurationSec"] = dbDurationSec;
-            complete["uploadThroughputMsgs"] = getUploadThroughputMsgs();
+            complete["uploadThroughputMBps"] = getUploadThroughputMBps();
             complete["uploadDurationSec"] = uploadDurationSec;
             
             // Calculate order processing statistics
@@ -738,24 +740,27 @@ double WebSocketServer::getOrderThroughput() const {
     return static_cast<double>(processingOrdersProcessed_) * 1000.0 / static_cast<double>(duration.count());
 }
 
-double WebSocketServer::getUploadThroughputMsgs() const {
-    // Messages per second between uploadStartTime_ and uploadEndTime_ (uses processingMessagesReceived_)
+double WebSocketServer::getUploadThroughputMBps() const {
+    // Megabytes per second between uploadStartTime_ and uploadEndTime_
     auto zero_tp = std::chrono::steady_clock::time_point{};
     if (!(uploadEndTime_ > uploadStartTime_) || uploadStartTime_ == zero_tp) return 0.0;
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_);
     if (duration.count() == 0) return 0.0;
-    const double msgs = static_cast<double>(processingMessagesReceived_.load(std::memory_order_acquire));
-    if (msgs <= 0.0) return 0.0;
-    return msgs * 1000.0 / static_cast<double>(duration.count());
+    // Use uploadBytesReceived_ which tracks bytes for the current upload session
+    const double bytes = static_cast<double>(uploadBytesReceived_);
+    if (bytes <= 0.0) return 0.0;
+    const double durationSec = static_cast<double>(duration.count()) / 1000.0;
+    const double mbps = (bytes / (1024.0 * 1024.0)) / durationSec;
+    return mbps;
 }
 
 
-void WebSocketServer::startProcessingThread(const std::shared_ptr<StreamingBufferState>& streamState,
+void WebSocketServer::startProcessingThread(const std::shared_ptr<StreamBuffer>& streamBuffer,
                                             size_t expectedSize,
                                             const std::string& fileName,
                                             const std::function<void(const std::string&)>& sendMessage) {
-    if (!streamState) {
-        utils::logError("Attempted to start processing without a streaming buffer state.");
+    if (!streamBuffer) {
+        utils::logError("Attempted to start processing without a stream buffer.");
         return;
     }
     
@@ -779,8 +784,8 @@ void WebSocketServer::startProcessingThread(const std::shared_ptr<StreamingBuffe
     });
     // No delay needed - ring buffer handles synchronization automatically
     
-    processingThread_ = std::jthread([this, streamState, expectedSize, fileName, sendMessage](std::stop_token) {
-        processDbnStream(streamState, expectedSize, fileName, sendMessage);
+    processingThread_ = std::jthread([this, streamBuffer, expectedSize, fileName, sendMessage](std::stop_token) {
+        processDbnStream(streamBuffer, expectedSize, fileName, sendMessage);
     });
 }
 

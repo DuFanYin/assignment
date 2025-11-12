@@ -35,7 +35,8 @@ namespace project {
     class JSONGenerator;
 }
 
-class StreamingBufferState;
+// Forward declaration
+class StreamBuffer;
 
 // Include ClickHouseConnection for Config
 #include "database/clickhouse_connection.hpp"
@@ -65,12 +66,12 @@ public:
         bool isProcessingStarted = false;
         std::function<void(const std::string&)> sendMessage; // Callback to send messages (thread-safe via loop->defer)
         
-        // Streaming state for incremental decoding
-        std::shared_ptr<StreamingBufferState> streamState;
+        // Streaming buffer for incremental decoding
+        std::shared_ptr<StreamBuffer> streamBuffer;
     };
     
 private:
-    void processDbnStream(const std::shared_ptr<StreamingBufferState>& streamState,
+    void processDbnStream(const std::shared_ptr<StreamBuffer>& streamBuffer,
                           size_t expectedSize,
                           const std::string& fileName,
                           const std::function<void(const std::string&)>& sendMessage = nullptr);
@@ -103,6 +104,7 @@ private:
     std::chrono::steady_clock::time_point uploadEndTime_;
     std::chrono::steady_clock::time_point dbStartTime_;
     std::chrono::steady_clock::time_point dbEndTime_;
+    size_t uploadBytesReceived_{0};  // Bytes received during current upload session
     
     // Processing thread statistics (same as receiver version)
     std::atomic<size_t> processingMessagesReceived_;
@@ -127,10 +129,10 @@ private:
     uint64_t getP99OrderProcessNs() const;
     double getDbThroughput() const { return dbThroughput_; }
     // Upload-only throughput helpers
-    double getUploadThroughputMsgs() const;   // chunks/sec
+    double getUploadThroughputMBps() const;   // MB/s
     
     // Helper function to start processing thread
-    void startProcessingThread(const std::shared_ptr<StreamingBufferState>& streamState,
+    void startProcessingThread(const std::shared_ptr<StreamBuffer>& streamBuffer,
                                size_t expectedSize,
                                const std::string& fileName,
                                const std::function<void(const std::string&)>& sendMessage);
