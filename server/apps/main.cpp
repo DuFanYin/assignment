@@ -20,7 +20,6 @@ int main() {
     
     // Get server settings (symbol will be extracted from DBN file)
     size_t topLevels = static_cast<size_t>(cfg.getInt("server.top_levels", 10));
-    size_t ringBufferSize = static_cast<size_t>(cfg.getInt("server.ring_buffer_size", 65536));
     
     // Get ClickHouse configuration
     ClickHouseConnection::Config dbConfig;
@@ -31,7 +30,7 @@ int main() {
     dbConfig.password = cfg.getString("clickhouse.password", "");
     dbConfig.compression = cfg.getBool("clickhouse.compression", true);
     
-    auto server = std::make_unique<WebSocketServer>(wsPort, dbConfig, topLevels, ringBufferSize);
+    auto server = std::make_unique<WebSocketServer>(wsPort, dbConfig, topLevels);
     
     if (!server->start()) {
         std::cerr << "Failed to start WebSocket server" << std::endl;

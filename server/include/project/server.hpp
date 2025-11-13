@@ -17,7 +17,6 @@
 #include <databento/constants.hpp>
 #include <databento/record.hpp>
 
-namespace db = databento;
 
 // Message wrapper for ring buffer
 struct MboMessageWrapper {
@@ -44,8 +43,7 @@ class StreamBuffer;
 class WebSocketServer {
 public:
     WebSocketServer(int port, const ClickHouseConnection::Config& dbConfig,
-                    size_t topLevels = 10,
-                    size_t ringBufferSize = 65536);
+                    size_t topLevels = 10);
     ~WebSocketServer();
     
     bool start();

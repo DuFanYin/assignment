@@ -25,15 +25,14 @@
 namespace db = databento;
 
 WebSocketServer::WebSocketServer(int port, const ClickHouseConnection::Config& dbConfig,
-                                  size_t topLevels,
-                                  size_t ringBufferSize)
+                                  size_t topLevels)
     : port_(port)
     , databaseConfig_(dbConfig)
     , isServerRunning_(false)
     , totalMessagesProcessed_(0)
     , totalBytesReceived_(0)
     , orderBook_(std::make_unique<Book>())
-    , snapshotRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>(ringBufferSize))
+    , snapshotRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>())
     , symbol_("")  // Will be extracted from DBN file
     , topLevels_(topLevels)
     , processingMessagesReceived_(0)
@@ -345,7 +344,7 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& stre
                 processingMessagesReceived_++;
                 
                 try {
-                    auto applyStart = std::chrono::steady_clock::now();
+                    auto applyStart = std::chrono::steady_clock::now();         // timer start
                     
                     // Normalize price from nanos to cents (2dp format)
                     // Original price is in nanos (e.g., 64.83 = 64830000000)
@@ -391,7 +390,7 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& stre
                         snap.asks.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
                     }
                     
-                    auto applyEnd = std::chrono::steady_clock::now();
+                    auto applyEnd = std::chrono::steady_clock::now();    // timer end
                     
                     const uint64_t elapsedNs = static_cast<uint64_t>(std::chrono::nanoseconds(applyEnd - applyStart).count());
                     processingTotalTimeNs_ += elapsedNs;
@@ -409,7 +408,6 @@ void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& stre
                     }
                     processingOrdersProcessed_++;
                     
-                    // Push snapshot to ring buffer for database writing
                     MboMessageWrapper wrapper(snap);
                     snapshotRingBuffer_->push(wrapper);
                     

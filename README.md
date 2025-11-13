@@ -177,17 +177,17 @@ Each JSON record contains:
   "timestamp": "1234567890123456789",
   "timestamp_ns": 1234567890123456789,
   "bbo": {
-    "bid": {"price": "123450000000", "size": 10, "count": 3},
-    "ask": {"price": "123460000000", "size": 8, "count": 2}
+    "bid": {"price": "64.83", "size": 10, "count": 3},
+    "ask": {"price": "64.84", "size": 8, "count": 2}
   },
   "levels": {
     "bids": [
-      {"price": "123450000000", "size": 10, "count": 3},
-      {"price": "123440000000", "size": 15, "count": 5}
+      {"price": "64.83", "size": 10, "count": 3},
+      {"price": "64.82", "size": 15, "count": 5}
     ],
     "asks": [
-      {"price": "123460000000", "size": 8, "count": 2},
-      {"price": "123470000000", "size": 12, "count": 4}
+      {"price": "64.84", "size": 8, "count": 2},
+      {"price": "64.85", "size": 12, "count": 4}
     ]
   },
   "stats": {
