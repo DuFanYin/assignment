@@ -1,52 +1,31 @@
-#include "project/server.hpp"
-#include "project/utils.hpp"
-#include "project/config.hpp"
-#include "database/clickhouse_connection.hpp"
-#include "database/database_writer.hpp"
+#include "core/server.hpp"
+#include "util/streamer.hpp"
 #include "database/json_generator.hpp"
-#include "project/streamer.hpp"
-#include <databento/dbn_decoder.hpp>
-#include <databento/record.hpp>
-#include <fstream>
-#include <sstream>
-#include <functional>
-#include <thread>
-#include <stop_token>
-#include <random>
+#include "util/utils.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
-// Use JSON from databento dependencies
+#include <fstream>
+#include <functional>
+#include <sstream>
+#include <thread>
+
 #include <nlohmann/json.hpp>
 
 // Include uWebSockets
 #include "App.h"
 #include "Loop.h"
 
-namespace db = databento;
-
 WebSocketServer::WebSocketServer(int port, const ClickHouseConnection::Config& dbConfig,
-                                  size_t topLevels)
+                                 size_t topLevels)
     : port_(port)
     , databaseConfig_(dbConfig)
     , isServerRunning_(false)
-    , totalMessagesProcessed_(0)
     , totalBytesReceived_(0)
-    , orderBook_(std::make_unique<Book>())
-    , snapshotRingBuffer_(std::make_unique<RingBuffer<MboMessageWrapper>>())
-    , symbol_("")  // Will be extracted from DBN file
     , topLevels_(topLevels)
-    , processingMessagesReceived_(0)
-    , processingOrdersProcessed_(0)
-    , processingTotalTimeNs_(0)
-    , processingTimingSamples_(0)
-    , processingTimingReservoir_()
-    , processingRng_(std::random_device{}())
-{
-    // Initialize order book (symbol will be set from DBN file metadata)
-    orderBook_->setTopLevels(topLevels_);
-    
-    // Initialize timing reservoir
-    processingTimingReservoir_.reserve(kTimingReservoirSize);
+    , persistenceManager_(std::make_unique<PersistenceManager>(databaseConfig_))
+    , processingManager_(std::make_unique<ProcessingManager>(topLevels_, isServerRunning_)) {
+    processingManager_->attachPersistence(persistenceManager_.get());
 }
 
 WebSocketServer::~WebSocketServer() {
@@ -54,21 +33,11 @@ WebSocketServer::~WebSocketServer() {
 }
 
 bool WebSocketServer::start() {
-    if (isServerRunning_) {
+    if (!persistenceManager_->initialize()) {
+        utils::logError("Failed to initialize persistence layer");
         return false;
     }
-    
-    // Initialize database writer and JSON generator
-    try {
-        databaseWriter_ = std::make_unique<project::DatabaseWriter>(databaseConfig_);
-        jsonGenerator_ = std::make_unique<project::JSONGenerator>(databaseConfig_);
-    } catch (const std::exception& e) {
-        utils::logError("Failed to initialize database writer: " + std::string(e.what()));
-        return false;
-    }
-    
-    // Database writer thread started per-cycle in startProcessingThread() to allow multiple cycles
-    
+
     // Start uWebSockets server - compression disabled (DBN files already compressed)
     uWS::App().ws<WebSocketServer::PerSocketData>("/*", {
         .compression = uWS::CompressOptions(uWS::DISABLED),
@@ -131,7 +100,13 @@ bool WebSocketServer::start() {
                     
                     // Start processing immediately - processing thread reads from buffer as chunks arrive
                     data->isProcessingStarted = true;
-                    startProcessingThread(data->streamBuffer, data->fileSize, data->fileName, data->sendMessage);
+                    processingManager_->setUploadMetrics(uploadStartTime_, uploadEndTime_, uploadBytesReceived_);
+                    processingManager_->startProcessing(
+                        data->streamBuffer,
+                        data->fileSize,
+                        data->fileName,
+                        data->sendMessage
+                    );
                     
                     // No response needed - client starts sending immediately
                     return;
@@ -161,6 +136,7 @@ bool WebSocketServer::start() {
                 // File upload complete - signal end of stream to processing thread
                 if (data->bytesReceived >= data->fileSize && data->fileSize > 0) {
                     uploadEndTime_ = std::chrono::steady_clock::now();
+                    processingManager_->setUploadMetrics(uploadStartTime_, uploadEndTime_, uploadBytesReceived_);
                     if (data->streamBuffer) {
                         data->streamBuffer->markFinished();
                     }
@@ -177,10 +153,17 @@ bool WebSocketServer::start() {
                 data->isProcessingStarted = true;
                 uploadEndTime_ = std::chrono::steady_clock::now();
                 data->streamBuffer->markFinished();
-                startProcessingThread(data->streamBuffer, data->fileSize, data->fileName, data->sendMessage);
+                processingManager_->setUploadMetrics(uploadStartTime_, uploadEndTime_, uploadBytesReceived_);
+                processingManager_->startProcessing(
+                    data->streamBuffer,
+                    data->fileSize,
+                    data->fileName,
+                    data->sendMessage
+                );
             } else if (data->streamBuffer) {
                 // Processing already started - just signal end of stream
                 uploadEndTime_ = std::chrono::steady_clock::now();
+                processingManager_->setUploadMetrics(uploadStartTime_, uploadEndTime_, uploadBytesReceived_);
                 data->streamBuffer->markFinished();
             }
             
@@ -193,7 +176,8 @@ bool WebSocketServer::start() {
         
         std::string sessionId = std::string(req->getParameter(0));
         
-        if (sessionId.empty() || !jsonGenerator_) {
+        auto* jsonGenerator = persistenceManager_->jsonGenerator();
+        if (sessionId.empty() || !jsonGenerator) {
             res->writeStatus("400 Bad Request");
             res->end("{\"error\":\"Invalid session ID\"}");
             return;
@@ -201,7 +185,7 @@ bool WebSocketServer::start() {
         
         nlohmann::json response;
         try {
-            auto* client = jsonGenerator_->getConnection().getClient();
+            auto* client = jsonGenerator->getConnection().getClient();
             if (!client) {
                 res->writeStatus("500 Internal Server Error");
                 res->end("{\"error\":\"DB client not available\"}");
@@ -247,10 +231,11 @@ bool WebSocketServer::start() {
         
         // Generate JSON from database
         std::string jsonData;
-        if (!sessionId.empty() && jsonGenerator_) {
-            jsonData = jsonGenerator_->generateJSON(sessionId);
-        } else if (jsonGenerator_ && !symbol_.empty()) {
-            jsonData = jsonGenerator_->generateJSONForSymbol(symbol_);
+        auto* jsonGenerator = persistenceManager_->jsonGenerator();
+        if (!sessionId.empty() && jsonGenerator) {
+            jsonData = jsonGenerator->generateJSON(sessionId);
+        } else if (jsonGenerator && !processingManager_->symbol().empty()) {
+            jsonData = jsonGenerator->generateJSONForSymbol(processingManager_->symbol());
         } else {
             jsonData = "{\"error\":\"No data available\"}";
         }
@@ -281,519 +266,9 @@ bool WebSocketServer::start() {
     return true;
 }
 
-void WebSocketServer::processDbnStream(const std::shared_ptr<StreamBuffer>& streamBuffer,
-                                       size_t expectedSize,
-                                       const std::string& fileName,
-                                       const std::function<void(const std::string&)>& sendMessage) {
-    if (!streamBuffer) {
-        utils::logError("Stream buffer is null. Cannot process DBN stream.");
-        return;
-    }
-    
-    try {
-        auto reader = std::make_unique<StreamReader>(streamBuffer);
-        databento::DbnDecoder decoder(databento::ILogReceiver::Default(), std::move(reader));
-        
-        // Extract metadata directly from stream
-        auto metadata = decoder.DecodeMetadata();
-        if (!metadata.symbols.empty()) {
-            symbol_ = metadata.symbols[0];  // Use first symbol from the file
-            orderBook_->setSymbol(symbol_);
-        } else {
-            utils::logWarning("No symbols found in DBN file metadata");
-        }
-        
-        // Start database session before processing
-        if (databaseWriter_ && !symbol_.empty()) {
-            try {
-                const std::string sessionFileName = fileName.empty() ? "upload.dbn" : fileName;
-                const std::size_t payloadSize = expectedSize > 0 ? expectedSize : streamBuffer->getTotalBytes();
-                databaseWriter_->startSession(symbol_, sessionFileName, payloadSize);
-                activeSessionId_ = databaseWriter_->getCurrentSessionId();  // Cache it - never touch databaseWriter_ again from this thread
-            } catch (const std::exception& e) {
-                utils::logError("Failed to start database session: " + std::string(e.what()));
-            }
-        }
-        
-        // Reset statistics for this processing session
-        processingMessagesReceived_ = 0;
-        processingOrdersProcessed_ = 0;
-        processingTotalTimeNs_ = 0;
-        processingTimingSamples_ = 0;
-        processingTimingReservoir_.clear();
-        
-        // Send initial status - processing has started (streaming mode)
-        if (sendMessage) {
-            nlohmann::json status;
-            status["type"] = "stats";
-            status["status"] = "Processing file (streaming)...";
-            status["messagesProcessed"] = 0;
-            sendMessage(status.dump());
-        }
-        
-        // Start timing when parsing begins (first message taken from DBN)
-        processingStartTime_ = std::chrono::steady_clock::now();
-        
-        // Process all records - decoder will block waiting for data as chunks arrive
-        const db::Record* record;
-        while ((record = decoder.DecodeRecord()) != nullptr) {
-            if (record->RType() == db::RType::Mbo) {
-                const auto& mbo = record->Get<db::MboMsg>();
-                
-                // Count message as received
-                processingMessagesReceived_++;
-                
-                try {
-                    auto applyStart = std::chrono::steady_clock::now();         // timer start
-                    
-                    // Normalize price from nanos to cents (2dp format)
-                    // Original price is in nanos (e.g., 64.83 = 64830000000)
-                    // Convert to cents (e.g., 64.83 = 6483) for 2dp storage
-                    // Keep kUndefPrice as-is (special sentinel value for undefined prices)
-                    db::MboMsg normalizedMbo = mbo;
-                    if (normalizedMbo.price != db::kUndefPrice && normalizedMbo.price != 0) {
-                        // Convert nanos to cents: divide by 1e7 (1e9 nanos / 100 cents = 1e7)
-                        normalizedMbo.price = normalizedMbo.price / kNanosToCents;
-                    }
-                    
-                    // Apply normalized message to order book
-                    orderBook_->Apply(normalizedMbo);
-                    
-                    // Capture snapshot
-                    BookSnapshot snap;
-                    snap.symbol = symbol_;
-                    snap.ts_ns = mbo.hd.ts_event.time_since_epoch().count();
-                    
-                    // Get BBO
-                    auto bbo = orderBook_->Bbo();
-                    snap.bid = bbo.first;
-                    snap.ask = bbo.second;
-                    snap.total_orders = orderBook_->GetOrderCount();
-                    snap.bid_levels = orderBook_->GetBidLevelCount();
-                    snap.ask_levels = orderBook_->GetAskLevelCount();
-                    
-                    // Get top levels
-                    size_t bidCount = std::min(topLevels_, orderBook_->GetBidLevelCount());
-                    size_t askCount = std::min(topLevels_, orderBook_->GetAskLevelCount());
-                    snap.bids.reserve(bidCount);
-                    snap.asks.reserve(askCount);
-                    
-                    for (size_t i = 0; i < bidCount; ++i) {
-                        auto lvl = orderBook_->GetBidLevel(i);
-                        if (!lvl || lvl.price == db::kUndefPrice) break;
-                        snap.bids.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
-                    }
-                    
-                    for (size_t i = 0; i < askCount; ++i) {
-                        auto lvl = orderBook_->GetAskLevel(i);
-                        if (!lvl || lvl.price == db::kUndefPrice) break;
-                        snap.asks.push_back(LevelEntry{lvl.price, lvl.size, lvl.count});
-                    }
-                    
-                    auto applyEnd = std::chrono::steady_clock::now();    // timer end
-                    
-                    const uint64_t elapsedNs = static_cast<uint64_t>(std::chrono::nanoseconds(applyEnd - applyStart).count());
-                    processingTotalTimeNs_ += elapsedNs;
-                    ++processingTimingSamples_;
-                    
-                    // Update timing reservoir
-                    if (processingTimingReservoir_.size() < kTimingReservoirSize) {
-                        processingTimingReservoir_.push_back(elapsedNs);
-                    } else {
-                        std::uniform_int_distribution<uint64_t> dist(0, processingTimingSamples_ - 1);
-                        const uint64_t idx = dist(processingRng_);
-                        if (idx < kTimingReservoirSize) {
-                            processingTimingReservoir_[static_cast<size_t>(idx)] = elapsedNs;
-                        }
-                    }
-                    processingOrdersProcessed_++;
-                    
-                    MboMessageWrapper wrapper(snap);
-                    snapshotRingBuffer_->push(wrapper);
-                    
-                    totalMessagesProcessed_++;
-                    
-                    // Send periodic status updates
-                    if (sendMessage && totalMessagesProcessed_ % kStatusUpdateInterval == 0) {
-                        nlohmann::json stats;
-                        stats["type"] = "stats";
-                        stats["status"] = "Processing...";
-                        stats["messagesProcessed"] = totalMessagesProcessed_.load();
-                        sendMessage(stats.dump());
-                    }
-                } catch (const std::invalid_argument& e) {
-                    // Handle missing orders/levels gracefully
-                    std::string error_msg = e.what();
-                    if (error_msg.find("No order with ID") != std::string::npos ||
-                        error_msg.find("Received event for unknown level") != std::string::npos) {
-                        // Skip silently (quiet)
-                    } else {
-                        throw;
-                    }
-                } catch (const std::exception& e) {
-                    utils::logError("Error processing order: " + std::string(e.what()));
-                }
-            }
-        }
-        
-        // End timing when processing completes
-        processingEndTime_ = std::chrono::steady_clock::now();
-        
-        // Capture stats for DB thread to write (do this BEFORE setting isServerRunning_ = false)
-        sessionStats_.messagesReceived = processingMessagesReceived_.load();
-        sessionStats_.ordersProcessed = processingOrdersProcessed_.load();
-        sessionStats_.throughput = getThroughput();
-        sessionStats_.avgProcessNs = static_cast<int64_t>(getAverageOrderProcessNs());
-        sessionStats_.p99ProcessNs = getP99OrderProcessNs();
-            
-        // Memory fence: ensure all sessionStats_ writes are visible before setting isServerRunning_ = false
-        std::atomic_thread_fence(std::memory_order_release);
-        
-        // Signal that processing is complete - DB thread will exit when buffer is empty
-        isServerRunning_.store(false, std::memory_order_release);
-        
-        // Wait for DB writes to complete, then update throughput
-        if (databaseWriterThread_.joinable()) {
-            databaseWriterThread_.join();
-        }
-        sessionStats_.throughput = getThroughput();
-        
-        if (sendMessage) {
-            nlohmann::json complete;
-            complete["type"] = "complete";
-            complete["messagesReceived"] = processingMessagesReceived_.load();
-            complete["ordersProcessed"] = processingOrdersProcessed_.load();
-            complete["messagesProcessed"] = totalMessagesProcessed_.load();
-            complete["bytesReceived"] = totalBytesReceived_.load();
-            complete["dbWritesPending"] = snapshotRingBuffer_->size();
-            complete["sessionId"] = activeSessionId_;
-            // Compute durations: total from metadata arrival to DB thread completion
-            auto zero_tp = std::chrono::steady_clock::time_point{};
-            double totalDurationSec = 0.0;
-            if (uploadStartTime_ > zero_tp && dbEndTime_ > zero_tp && dbEndTime_ > uploadStartTime_) {
-                totalDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - uploadStartTime_).count()) / 1000.0;
-            }
-            double uploadDurationSec = 0.0;
-            if (uploadEndTime_ > uploadStartTime_ && uploadStartTime_ > zero_tp) {
-                uploadDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_).count()) / 1000.0;
-            }
-            double processingDurationSec = 0.0;
-            if (processingEndTime_ > processingStartTime_) {
-                processingDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(processingEndTime_ - processingStartTime_).count()) / 1000.0;
-            }
-            double dbDurationSec = 0.0;
-            if (dbEndTime_ > dbStartTime_ && dbStartTime_ > zero_tp) {
-                dbDurationSec = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - dbStartTime_).count()) / 1000.0;
-            }
-
-            double totalThroughput = getThroughput();
-            complete["totalThroughput"] = totalThroughput;
-            complete["totalDurationSec"] = totalDurationSec;
-            double orderThroughput = getOrderThroughput();
-            complete["orderThroughput"] = orderThroughput;
-            complete["processingDurationSec"] = processingDurationSec;
-            complete["dbThroughput"] = getDbThroughput();
-            complete["dbDurationSec"] = dbDurationSec;
-            complete["uploadThroughputMBps"] = getUploadThroughputMBps();
-            complete["uploadDurationSec"] = uploadDurationSec;
-            
-            // Calculate order processing statistics
-            double avgNs = getAverageOrderProcessNs();
-            uint64_t p99Ns = getP99OrderProcessNs();
-            if (avgNs > 0.0) {
-                complete["averageOrderProcessNs"] = avgNs;
-                complete["p99OrderProcessNs"] = p99Ns;
-            }
-            
-            // Final order book summary
-            if (orderBook_) {
-                complete["activeOrders"] = orderBook_->GetOrderCount();
-                complete["bidPriceLevels"] = orderBook_->GetBidLevelCount();
-                complete["askPriceLevels"] = orderBook_->GetAskLevelCount();
-                
-                auto finalBbo = orderBook_->Bbo();
-                auto finalBid = finalBbo.first;
-                auto finalAsk = finalBbo.second;
-                
-                if (finalBid.price != db::kUndefPrice && finalAsk.price != db::kUndefPrice) {
-                    double bidValue = static_cast<double>(finalBid.price) / static_cast<double>(kPriceScaleFactor);
-                    double askValue = static_cast<double>(finalAsk.price) / static_cast<double>(kPriceScaleFactor);
-                    double spreadValue = std::abs(askValue - bidValue);
-                    
-                    complete["bestBid"] = bidValue;
-                    complete["bestBidSize"] = finalBid.size;
-                    complete["bestBidCount"] = finalBid.count;
-                    complete["bestAsk"] = askValue;
-                    complete["bestAskSize"] = finalAsk.size;
-                    complete["bestAskCount"] = finalAsk.count;
-                    complete["bidAskSpread"] = spreadValue;
-                }
-            }
-            
-            sendMessage(complete.dump());
-        }
-        
-        // Capture final book state for DB thread to write
-        if (orderBook_) {
-            auto finalBbo = orderBook_->Bbo();
-            auto finalBid = finalBbo.first;
-            auto finalAsk = finalBbo.second;
-            
-            if (finalBid.price != db::kUndefPrice && finalAsk.price != db::kUndefPrice) {
-                sessionStats_.totalOrders = orderBook_->GetOrderCount();
-                sessionStats_.bidLevels = orderBook_->GetBidLevelCount();
-                sessionStats_.askLevels = orderBook_->GetAskLevelCount();
-                sessionStats_.bestBid = static_cast<double>(finalBid.price) / static_cast<double>(kPriceScaleFactor);
-                sessionStats_.bestAsk = static_cast<double>(finalAsk.price) / static_cast<double>(kPriceScaleFactor);
-                sessionStats_.spread = std::abs(sessionStats_.bestAsk - sessionStats_.bestBid);
-                sessionStats_.hasBookState = true;
-                
-                // Memory fence: ensure all writes are visible
-                std::atomic_thread_fence(std::memory_order_release);
-            }
-        }
-        
-        // DB thread will write stats and end session when it finishes
-        if (orderBook_) {
-            orderBook_->Clear();
-        }
-        
-        // No cleanup needed - streaming buffer will be released automatically
-        
-    } catch (const std::exception& e) {
-        utils::logError("Error processing DBN stream: " + std::string(e.what()));
-        
-        // End database session with error
-        if (databaseWriter_) {
-            databaseWriter_->endSession(false, e.what());
-        }
-        isServerRunning_.store(false, std::memory_order_release);
-        if (databaseWriterThread_.joinable()) {
-            databaseWriterThread_.join();
-        }
-        
-        // Send error message to client
-        if (sendMessage) {
-            nlohmann::json error;
-            error["type"] = "error";
-            error["error"] = "Error processing DBN stream: " + std::string(e.what());
-            sendMessage(error.dump());
-        }
-    }
-}
-
-void WebSocketServer::databaseWriterLoop(std::stop_token stopToken) {
-    // Drop indexes for faster bulk loading
-    if (databaseWriter_) {
-        databaseWriter_->dropIndexes();
-    }
-    
-    size_t itemsWritten = 0;
-    constexpr size_t kBatchSize = 50000;  // Larger batches for COPY BINARY
-    std::vector<MboMessageWrapper> batch;
-    batch.reserve(kBatchSize);
-    bool started = false;
-    
-    auto writeBatch = [&]() {
-        if (batch.empty()) return;
-        
-        if (databaseWriter_ && databaseWriter_->writeBatch(batch)) {
-            itemsWritten += batch.size();
-        }
-        batch.clear();
-    };
-    
-    MboMessageWrapper wrapper;
-    
-    // Continue until processing done AND buffer empty, or stop requested
-    while ((isServerRunning_.load(std::memory_order_acquire) || !snapshotRingBuffer_->empty()) && 
-           !stopToken.stop_requested()) {
-        if (snapshotRingBuffer_->try_pop(wrapper)) {
-            if (!started) {
-                started = true;
-                dbStartTime_ = std::chrono::steady_clock::now();
-            }
-            batch.push_back(std::move(wrapper));
-            
-            // Flush when batch is full
-            if (batch.size() >= kBatchSize) {
-                writeBatch();
-            }
-        } else {
-            // Buffer empty - flush pending batch
-            writeBatch();
-            
-            // Exit if done or stop requested
-            if ((!isServerRunning_.load(std::memory_order_acquire) && snapshotRingBuffer_->empty()) ||
-                stopToken.stop_requested()) {
-                break;
-            }
-            
-            // Avoid busy-wait
-            std::this_thread::sleep_for(kDatabaseWriterSleepMs);
-        }
-    }
-    
-    // Final flush of any remaining items
-    writeBatch();
-    dbEndTime_ = std::chrono::steady_clock::now();
-    // Compute DB throughput over DB writer active window
-    if (started && dbEndTime_ > dbStartTime_) {
-        auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - dbStartTime_).count();
-        if (durMs > 0) {
-            dbThroughput_ = static_cast<double>(itemsWritten) * 1000.0 / static_cast<double>(durMs);
-        } else {
-            dbThroughput_ = 0.0;
-        }
-    } else {
-        dbThroughput_ = 0.0;
-    }
-    
-    // Recreate indexes after bulk load complete
-    if (databaseWriter_) {
-        databaseWriter_->recreateIndexes();
-    }
-    
-    // Write session stats and close session after all writes complete
-    if (databaseWriter_) {
-        // Memory fence: ensure we see all writes from processing thread
-        std::atomic_thread_fence(std::memory_order_acquire);
-        
-        // Update session stats
-        if (sessionStats_.messagesReceived > 0) {
-            databaseWriter_->updateSessionStats(
-                sessionStats_.messagesReceived,
-                sessionStats_.ordersProcessed,
-                sessionStats_.throughput,
-                sessionStats_.avgProcessNs,
-                sessionStats_.p99ProcessNs
-            );
-        }
-        
-        // Update final book state
-        if (sessionStats_.hasBookState) {
-            databaseWriter_->updateFinalBookState(
-                sessionStats_.totalOrders,
-                sessionStats_.bidLevels,
-                sessionStats_.askLevels,
-                sessionStats_.bestBid,
-                sessionStats_.bestAsk,
-                sessionStats_.spread
-            );
-        }
-        
-        // End session
-        databaseWriter_->endSession(true);
-    }
-}
-
 void WebSocketServer::stop() {
-    if (!isServerRunning_) {
-        return;
-    }
-    
-    isServerRunning_ = false;
-    
-    // Wait for processing thread to complete
-    if (processingThread_.has_value() && processingThread_->joinable()) {
-        processingThread_->join();
-    }
-    processingThread_.reset();
-    
-    // Wait for database writer thread to complete
-    if (databaseWriterThread_.joinable()) {
-        databaseWriterThread_.join();
-    }
-}
-
-double WebSocketServer::getThroughput() const {
-    // Total throughput from metadata arrival through DB thread completion
-    if (processingMessagesReceived_ == 0) return 0.0;
-    auto zero_tp = std::chrono::steady_clock::time_point{};
-    if (uploadStartTime_ <= zero_tp) return 0.0;
-    if (dbEndTime_ <= zero_tp || dbEndTime_ <= uploadStartTime_) return 0.0;
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(dbEndTime_ - uploadStartTime_);
-    if (duration.count() == 0) return 0.0;
-    return static_cast<double>(processingMessagesReceived_) * 1000.0 / static_cast<double>(duration.count());
-}
-
-
-double WebSocketServer::getAverageOrderProcessNs() const {
-    if (processingTimingSamples_ == 0) return 0.0;
-    return static_cast<double>(processingTotalTimeNs_) / static_cast<double>(processingTimingSamples_);
-}
-
-uint64_t WebSocketServer::getP99OrderProcessNs() const {
-    if (processingTimingReservoir_.empty()) return 0;
-    const size_t sampleCount = static_cast<size_t>(std::min<uint64_t>(processingTimingSamples_, processingTimingReservoir_.size()));
-    if (sampleCount == 0) return 0;
-    std::vector<uint64_t> samples;
-    samples.reserve(sampleCount);
-    for (size_t i = 0; i < sampleCount; ++i) {
-        samples.push_back(processingTimingReservoir_[i]);
-    }
-    size_t idx = (sampleCount * 99 + 99) / 100; // ceil(0.99 * n)
-    if (idx == 0) idx = 1;
-    if (idx > sampleCount) idx = sampleCount;
-    std::nth_element(samples.begin(), samples.begin() + (idx - 1), samples.end());
-    return samples[idx - 1];
-}
-
-double WebSocketServer::getOrderThroughput() const {
-    // Orders per second over the processing window only
-    if (processingOrdersProcessed_ == 0) return 0.0;
-    if (!(processingEndTime_ > processingStartTime_)) return 0.0;
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(processingEndTime_ - processingStartTime_);
-    if (duration.count() == 0) return 0.0;
-    return static_cast<double>(processingOrdersProcessed_) * 1000.0 / static_cast<double>(duration.count());
-}
-
-double WebSocketServer::getUploadThroughputMBps() const {
-    // Megabytes per second between uploadStartTime_ and uploadEndTime_
-    auto zero_tp = std::chrono::steady_clock::time_point{};
-    if (!(uploadEndTime_ > uploadStartTime_) || uploadStartTime_ == zero_tp) return 0.0;
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(uploadEndTime_ - uploadStartTime_);
-    if (duration.count() == 0) return 0.0;
-    // Use uploadBytesReceived_ which tracks bytes for the current upload session
-    const double bytes = static_cast<double>(uploadBytesReceived_);
-    if (bytes <= 0.0) return 0.0;
-    const double durationSec = static_cast<double>(duration.count()) / 1000.0;
-    const double mbps = (bytes / (1024.0 * 1024.0)) / durationSec;
-    return mbps;
-}
-
-
-void WebSocketServer::startProcessingThread(const std::shared_ptr<StreamBuffer>& streamBuffer,
-                                            size_t expectedSize,
-                                            const std::string& fileName,
-                                            const std::function<void(const std::string&)>& sendMessage) {
-    if (!streamBuffer) {
-        utils::logError("Attempted to start processing without a stream buffer.");
-        return;
-    }
-    
-    // Once processing starts, it cannot be stopped - runs to completion independently of WebSocket connection
-    if (processingThread_.has_value() && processingThread_->joinable()) {
-        processingThread_->join();
-    }
-    processingThread_.reset();
-    if (databaseWriterThread_.joinable()) {
-        databaseWriterThread_.join();
-    }
-    isServerRunning_.store(true, std::memory_order_release);
-    dbThroughput_ = 0.0;
-    dbStartTime_ = {};
-    dbEndTime_ = {};
-    if (orderBook_) {
-        orderBook_->Clear();
-    }
-    databaseWriterThread_ = std::jthread([this](std::stop_token st) {
-        this->databaseWriterLoop(st);
-    });
-    // No delay needed - ring buffer handles synchronization automatically
-    
-    processingThread_ = std::jthread([this, streamBuffer, expectedSize, fileName, sendMessage](std::stop_token) {
-        processDbnStream(streamBuffer, expectedSize, fileName, sendMessage);
-    });
+    processingManager_->stopProcessing();
+    persistenceManager_->markProcessingComplete();
+    persistenceManager_->waitForCompletion();
 }
 

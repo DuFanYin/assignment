@@ -9,6 +9,51 @@ A high-performance server for processing DBN (Databento) order book files, stori
   <em><b>Tested on localhost</b></em>
 </p>
 
+```
+.
+├── apps
+│   ├── CMakeLists.txt
+│   └── main.cpp
+├── CMakeLists.txt
+├── config
+│   └── config.ini
+├── db
+│   └── schema
+│       └── clickhouse_schema.sql
+├── include
+│   ├── core
+│   │   ├── persistence_manager.hpp
+│   │   ├── processing_manager.hpp
+│   │   └── server.hpp
+│   ├── database
+│   │   ├── clickhouse_connection.hpp
+│   │   ├── database_writer.hpp
+│   │   └── json_generator.hpp
+│   └── util
+│       ├── order_book.hpp
+│       ├── ring_buffer.hpp
+│       ├── streamer.hpp
+│       └── utils.hpp
+├── scripts
+│   └── start.sh
+├── src
+│   ├── CMakeLists.txt
+│   ├── core
+│   │   ├── persistence_manager.cpp
+│   │   ├── processing_manager.cpp
+│   │   └── server.cpp
+│   ├── database
+│   │   ├── clickhouse_connection.cpp
+│   │   ├── database_writer.cpp
+│   │   └── json_generator.cpp
+│   └── util
+│       ├── order_book.cpp
+│       ├── ring_buffer.cpp
+│       ├── streamer.cpp
+│       └── utils.cpp
+└── static
+    └── index.html
+```
 
 ## Prerequisites & Setup
 

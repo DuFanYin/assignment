@@ -34,10 +34,13 @@ set(USOCKETS_ROOT ${UWEBSOCKETS_ROOT}/uSockets)
 
 # Build core library
 add_library(core_lib
-    core/config.cpp
-    core/utils.cpp
+    core/persistence_manager.cpp
+    core/processing_manager.cpp
     core/server.cpp
-    streamer/streamer.cpp
+    util/order_book.cpp
+    util/ring_buffer.cpp
+    util/streamer.cpp
+    util/utils.cpp
 )
 
 target_include_directories(core_lib PUBLIC

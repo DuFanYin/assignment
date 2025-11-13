@@ -2,8 +2,8 @@
 #include <memory>
 #include <thread>
 #include <chrono>
-#include "project/server.hpp"
-#include "project/config.hpp"
+#include "core/server.hpp"
+#include "util/utils.hpp"
 #include <cstdlib>
 
 int main() {

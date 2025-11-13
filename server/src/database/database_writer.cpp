@@ -1,6 +1,5 @@
 #include "database/database_writer.hpp"
-#include "project/utils.hpp"
-#include "project/server.hpp"  // For MboMessageWrapper
+#include "util/utils.hpp"
 #include <clickhouse/client.h>
 #include <clickhouse/columns/column.h>
 #include <clickhouse/columns/array.h>

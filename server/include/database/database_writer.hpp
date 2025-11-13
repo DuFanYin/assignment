@@ -1,14 +1,12 @@
 #pragma once
 
 #include "database/clickhouse_connection.hpp"
-#include "project/book_snapshot.hpp"
+#include "util/order_book.hpp"
+#include "util/utils.hpp"
 #include <string>
 #include <memory>
 #include <atomic>
 #include <vector>
-
-// Forward declaration
-struct MboMessageWrapper;
 
 namespace project {
 
